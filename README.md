@@ -16,3 +16,8 @@ Required environment variables:
 
 - `DATABASE_URL`
 - `JWT_SECRET`
+
+Optional Render keep-alive:
+
+- `KEEP_ALIVE_URL=https://octavio-farm-api.onrender.com/health`
+- `KEEP_ALIVE_INTERVAL_MINUTES=14`
