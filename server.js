@@ -29,6 +29,10 @@ const roleRank = {
   AdminOwner: 4,
 };
 
+app.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'octavio-farm-api' });
+});
+
 function normalizeRole(role) {
   return roleAliases[role] || role;
 }
