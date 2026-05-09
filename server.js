@@ -20,6 +20,12 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret';
 const roleAliases = {
   Admin: 'AdminOwner',
   OpManager: 'OperationManager',
+  admin: 'AdminOwner',
+  adminowner: 'AdminOwner',
+  dataentry: 'DataEntry',
+  operationmanager: 'OperationManager',
+  opmanager: 'OperationManager',
+  viewer: 'Viewer',
 };
 
 const roleRank = {
@@ -34,7 +40,9 @@ app.get('/health', (req, res) => {
 });
 
 function normalizeRole(role) {
-  return roleAliases[role] || role;
+  if (!role) return role;
+  const compactRole = String(role).replace(/[\s_-]/g, '').toLowerCase();
+  return roleAliases[role] || roleAliases[compactRole] || role;
 }
 
 function hasMinimumRole(userRole, minimumRole) {
@@ -2925,7 +2933,7 @@ app.put('/api/batches/:batchId/loadings', authenticate, requireMinimumRole('Oper
   }
 });
 
-app.get('/api/transactions', authenticate, async (req, res) => {
+app.get('/api/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
     res.json(await getTransactions(req.query.batchId || null));
   } catch (err) {
@@ -2933,7 +2941,7 @@ app.get('/api/transactions', authenticate, async (req, res) => {
   }
 });
 
-app.get('/api/batches/:batchId/transactions', authenticate, async (req, res) => {
+app.get('/api/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
     res.json(await getTransactions(req.params.batchId));
   } catch (err) {
@@ -2941,11 +2949,11 @@ app.get('/api/batches/:batchId/transactions', authenticate, async (req, res) => 
   }
 });
 
-app.post('/api/transactions', authenticate, async (req, res) => {
+app.post('/api/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   await createTransaction(req, res);
 });
 
-app.post('/api/batches/:batchId/transactions', authenticate, async (req, res) => {
+app.post('/api/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   await createTransaction(req, res, req.params.batchId);
 });
 
@@ -3332,7 +3340,7 @@ app.get('/api/logs', authenticate, async (req, res) => {
   }
 });
 
-app.post('/api/logs', authenticate, async (req, res) => {
+app.post('/api/logs', authenticate, requireMinimumRole('DataEntry'), async (req, res) => {
   const {
     batchId,
     date,
