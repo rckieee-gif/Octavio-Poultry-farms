@@ -43,7 +43,7 @@ const stakeholderSeeds = [
   ['Roland', 'Owner'],
   ['Rolly', 'Owner'],
   ['Rodney', 'Owner'],
-  ['Others', 'Employee'],
+  ['Others', 'Other'],
   ['Hardware Credit', 'Supplier'],
   ['Gomez', 'Supplier'],
   ['Octavio Poultry Farm', 'Owner'],

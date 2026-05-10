@@ -295,6 +295,139 @@ function mapEmployeeCompensation(row) {
   };
 }
 
+const CORPO_GROUP_PREFIX = 'employees:';
+
+function parseCorpoGroupIds(corpoGroup) {
+  if (!corpoGroup?.startsWith(CORPO_GROUP_PREFIX)) return [];
+
+  return corpoGroup
+    .slice(CORPO_GROUP_PREFIX.length)
+    .split(',')
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id));
+}
+
+function isEmployeePaySheetName(name) {
+  const normalized = String(name || '').trim().toLowerCase();
+  return normalized && !['others', 'viewer', 'viewers'].includes(normalized);
+}
+
+function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLogRows) {
+  const parent = new Map();
+  const mortalityByEmployee = new Map();
+
+  dailyLogRows.forEach((row) => {
+    const employeeId = Number(row.employeeId);
+    if (!Number.isFinite(employeeId)) return;
+    mortalityByEmployee.set(employeeId, Number(row.mortality || 0));
+  });
+
+  const rows = compensationRows
+    .map(mapEmployeeCompensation)
+    .filter((employee) => isEmployeePaySheetName(employee.employeeName));
+
+  rows.forEach((row) => parent.set(row.employeeId, row.employeeId));
+
+  const find = (id) => {
+    const current = parent.get(id) ?? id;
+    if (current === id) return id;
+    const root = find(current);
+    parent.set(id, root);
+    return root;
+  };
+
+  const union = (left, right) => {
+    if (!parent.has(left) || !parent.has(right)) return;
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  };
+
+  rows.forEach((row) => {
+    parseCorpoGroupIds(row.corpoGroup).forEach((otherId) => union(row.employeeId, otherId));
+  });
+
+  const groups = new Map();
+
+  rows.forEach((row) => {
+    const key = find(row.employeeId);
+    const mortality = mortalityByEmployee.get(row.employeeId) || 0;
+    const grossHandledBirds = Number(row.handledBirds || 0);
+    const netHandledBirds = Math.max(grossHandledBirds - mortality, 0);
+    const group = groups.get(key) || { netHandledBirds: 0, members: [] };
+
+    group.netHandledBirds += netHandledBirds;
+    group.members.push(row.employeeId);
+    groups.set(key, group);
+  });
+
+  const getNames = (row) => new Set(
+    [row.employeeName, row.name, row.displayName]
+      .filter(Boolean)
+      .map((name) => String(name).trim())
+  );
+
+  const hasName = (names, ...values) => values.some((value) => names.has(String(value || '').trim()));
+
+  return rows.map((row) => {
+    const names = getNames(row);
+    const summary = transactionRows.reduce((total, tx) => {
+      const amount = Number(tx.amount || 0);
+
+      if (tx.fundingNature === 'Receivable' && tx.category === 'Cash Advance' && hasName(names, tx.paidTo, tx.paidToDisplayName)) {
+        total.cashAdvance += amount;
+      }
+
+      if (
+        tx.fundingNature === 'Receivable'
+        && (tx.type === 'Reimbursement' || tx.category === 'Reimbursement')
+        && hasName(names, tx.paidBy, tx.paidByDisplayName)
+      ) {
+        total.reimbursement += amount;
+      }
+
+      if (tx.fundingNature === 'OPEX' && tx.category === 'Labor' && hasName(names, tx.paidTo, tx.paidToDisplayName)) {
+        total.laborPaid += amount;
+      }
+
+      return total;
+    }, {
+      cashAdvance: 0,
+      reimbursement: 0,
+      laborPaid: 0,
+    });
+
+    const group = groups.get(find(row.employeeId));
+    const mortality = mortalityByEmployee.get(row.employeeId) || 0;
+    const grossHandledBirds = Number(row.handledBirds || 0);
+    const netHandledBirds = Math.max(grossHandledBirds - mortality, 0);
+    const memberCount = group?.members.length || 1;
+    const poolBirds = memberCount > 1 ? group.netHandledBirds : netHandledBirds;
+    const payableBirds = memberCount > 1 ? poolBirds / memberCount : netHandledBirds;
+    const cycleIncome = payableBirds * Number(row.ratePerBird || 1.5);
+    const outstandingAdvance = summary.cashAdvance - summary.reimbursement;
+    const remainingCyclePay = cycleIncome - summary.laborPaid;
+    const netPayable = remainingCyclePay - outstandingAdvance;
+
+    return {
+      ...row,
+      grossHandledBirds,
+      mortality,
+      netHandledBirds,
+      poolBirds,
+      payableBirds,
+      memberCount,
+      cycleIncome,
+      cashAdvance: summary.cashAdvance,
+      reimbursement: summary.reimbursement,
+      laborPaid: summary.laborPaid,
+      outstandingAdvance,
+      remainingCyclePay,
+      netPayable,
+    };
+  });
+}
+
 function mapDailyLog(row) {
   return {
     id: row.id,
@@ -1653,7 +1786,9 @@ app.post('/api/admin/users', authenticate, requirePrimaryOwner, async (req, res)
     return res.status(400).json({ error: 'Email, password, and role are required.' });
   }
 
-  if (!['AdminOwner', 'OperationManager', 'DataEntry', 'Viewer'].includes(normalizeRole(role))) {
+  const normalizedRole = normalizeRole(role);
+
+  if (!['AdminOwner', 'OperationManager', 'DataEntry', 'Viewer'].includes(normalizedRole)) {
     return res.status(400).json({ error: 'Invalid role.' });
   }
 
@@ -1662,8 +1797,9 @@ app.post('/api/admin/users', authenticate, requirePrimaryOwner, async (req, res)
   try {
     await client.query('BEGIN');
     const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const effectiveStakeholderType = normalizedRole === 'Viewer' ? 'Other' : (stakeholderType || 'Employee');
     const stakeholderId = stakeholderName?.trim()
-      ? await ensureStakeholder(client, farmId, stakeholderName.trim(), stakeholderType || 'Employee')
+      ? await ensureStakeholder(client, farmId, stakeholderName.trim(), effectiveStakeholderType)
       : null;
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await client.query(
@@ -1677,7 +1813,7 @@ app.post('/api/admin/users', authenticate, requirePrimaryOwner, async (req, res)
         email.trim(),
         username?.trim() || null,
         passwordHash,
-        normalizeRole(role),
+        normalizedRole,
       ]
     );
 
@@ -1737,9 +1873,6 @@ app.patch('/api/admin/users/:id', authenticate, requirePrimaryOwner, async (req,
       return res.status(400).json({ error: 'The primary owner account cannot be disabled.' });
     }
 
-    const stakeholderId = stakeholderName?.trim()
-      ? await ensureStakeholder(client, farmId, stakeholderName.trim(), stakeholderType || 'Employee')
-      : before.rows[0].stakeholder_id;
     const passwordHash = password ? await bcrypt.hash(password, 10) : before.rows[0].password_hash;
     const nextRole = role ? normalizeRole(role) : normalizeRole(before.rows[0].role);
 
@@ -1747,6 +1880,11 @@ app.patch('/api/admin/users/:id', authenticate, requirePrimaryOwner, async (req,
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Invalid role.' });
     }
+
+    const effectiveStakeholderType = nextRole === 'Viewer' ? 'Other' : (stakeholderType || 'Employee');
+    const stakeholderId = stakeholderName?.trim()
+      ? await ensureStakeholder(client, farmId, stakeholderName.trim(), effectiveStakeholderType)
+      : before.rows[0].stakeholder_id;
 
     const result = await client.query(
       `UPDATE users
@@ -2198,6 +2336,13 @@ app.get('/api/employees', authenticate, requireMinimumRole('OperationManager'), 
        WHERE farm_id = $1
          AND type = 'Employee'
          AND is_active = true
+         AND lower(COALESCE(display_name, name)) NOT IN ('others', 'viewer', 'viewers')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM users u
+           WHERE u.stakeholder_id = stakeholders.id
+             AND u.role = 'Viewer'
+         )
        ORDER BY COALESCE(display_name, name), name`,
       [farmId]
     );
@@ -2463,11 +2608,116 @@ app.get('/api/batches/:batchId/employee-compensations', authenticate, requireMin
        WHERE s.farm_id = $1
          AND s.type = 'Employee'
          AND s.is_active = true
+         AND lower(COALESCE(s.display_name, s.name)) NOT IN ('others', 'viewer', 'viewers')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM users u
+           WHERE u.stakeholder_id = s.id
+             AND u.role = 'Viewer'
+         )
        ORDER BY COALESCE(s.display_name, s.name), s.name`,
       [farmId, req.params.batchId]
     );
 
     res.json(result.rows.map(mapEmployeeCompensation));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/batches/:batchId/employee-pay-summary', authenticate, async (req, res) => {
+  try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
+    const batch = await pool.query(
+      'SELECT id FROM batches WHERE id = $1 AND farm_id = $2',
+      [req.params.batchId, farmId]
+    );
+
+    if (batch.rowCount === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    const [compensations, transactions, dailyLogs] = await Promise.all([
+      pool.query(
+        `SELECT
+           s.id AS "employeeId",
+           COALESCE(s.display_name, s.name) AS "employeeName",
+           s.metadata,
+           ebc.batch_id AS "batchId",
+           ebc.handled_birds AS "handledBirds",
+           ebc.rate_per_bird AS "ratePerBird",
+           ebc.corpo_group AS "corpoGroup",
+           ebc.remarks
+         FROM stakeholders s
+         LEFT JOIN employee_batch_compensations ebc
+           ON ebc.employee_id = s.id
+          AND ebc.batch_id = $2
+         WHERE s.farm_id = $1
+           AND s.type = 'Employee'
+           AND s.is_active = true
+           AND lower(COALESCE(s.display_name, s.name)) NOT IN ('others', 'viewer', 'viewers')
+           AND NOT EXISTS (
+             SELECT 1
+             FROM users u
+             WHERE u.stakeholder_id = s.id
+               AND u.role = 'Viewer'
+           )
+         ORDER BY COALESCE(s.display_name, s.name), s.name`,
+        [farmId, req.params.batchId]
+      ),
+      pool.query(
+        `SELECT
+           dt.type,
+           dt.funding_nature AS "fundingNature",
+           COALESCE(c.name, dt.category) AS category,
+           dt.amount,
+           paid_by.name AS "paidBy",
+           COALESCE(paid_by.display_name, paid_by.name) AS "paidByDisplayName",
+           paid_to.name AS "paidTo",
+           COALESCE(paid_to.display_name, paid_to.name) AS "paidToDisplayName"
+         FROM daily_transactions dt
+         LEFT JOIN categories c ON c.id = dt.category_id
+         LEFT JOIN stakeholders paid_by ON paid_by.id = dt.paid_by
+         LEFT JOIN stakeholders paid_to ON paid_to.id = dt.paid_to
+         WHERE dt.batch_id = $1
+           AND dt.is_void = false`,
+        [req.params.batchId]
+      ),
+      pool.query(
+        `SELECT
+           employee_id AS "employeeId",
+           COALESCE(SUM(mortality), 0) AS mortality
+         FROM daily_logs
+         WHERE batch_id = $1
+         GROUP BY employee_id`,
+        [req.params.batchId]
+      ),
+    ]);
+
+    const rows = buildEmployeePaySummaryRows(compensations.rows, transactions.rows, dailyLogs.rows);
+    const totals = rows.reduce((sum, row) => ({
+      grossHandledBirds: sum.grossHandledBirds + row.grossHandledBirds,
+      mortality: sum.mortality + row.mortality,
+      netHandledBirds: sum.netHandledBirds + row.netHandledBirds,
+      payableBirds: sum.payableBirds + row.payableBirds,
+      cycleIncome: sum.cycleIncome + row.cycleIncome,
+      laborPaid: sum.laborPaid + row.laborPaid,
+      outstandingAdvance: sum.outstandingAdvance + row.outstandingAdvance,
+      remainingCyclePay: sum.remainingCyclePay + row.remainingCyclePay,
+      netPayable: sum.netPayable + row.netPayable,
+    }), {
+      grossHandledBirds: 0,
+      mortality: 0,
+      netHandledBirds: 0,
+      payableBirds: 0,
+      cycleIncome: 0,
+      laborPaid: 0,
+      outstandingAdvance: 0,
+      remainingCyclePay: 0,
+      netPayable: 0,
+    });
+
+    res.json({ batchId: req.params.batchId, totals, rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2605,6 +2855,13 @@ app.get('/api/batches/:batchId/employee-assignments', authenticate, async (req, 
        WHERE s.farm_id = $1
          AND s.type = 'Employee'
          AND s.is_active = true
+         AND lower(COALESCE(s.display_name, s.name)) NOT IN ('others', 'viewer', 'viewers')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM users u
+           WHERE u.stakeholder_id = s.id
+             AND u.role = 'Viewer'
+         )
        ORDER BY COALESCE(s.metadata->>'assignedBuilding', ''), COALESCE(s.display_name, s.name), s.name`,
       [farmId, req.params.batchId]
     );
@@ -3513,6 +3770,214 @@ app.post('/api/logs', authenticate, requireMinimumRole('DataEntry'), async (req,
   }
 });
 
+app.patch('/api/logs/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+  const {
+    batchId,
+    date,
+    building,
+    employeeId,
+    handledBirds,
+    feedItemId,
+    feed,
+    mortality,
+    averageWeightGrams,
+    remarks
+  } = req.body;
+
+  if (!date || !building || !employeeId) {
+    return res.status(400).json({ error: 'date, building, and employee are required' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const before = await client.query(
+      `SELECT
+         dl.*,
+         b.name AS building,
+         COALESCE(s.display_name, s.name) AS employee_name
+       FROM daily_logs dl
+       JOIN batches ba ON ba.id = dl.batch_id
+       LEFT JOIN buildings b ON b.id = dl.building_id
+       LEFT JOIN stakeholders s ON s.id = dl.employee_id
+       WHERE dl.id = $1
+         AND ba.farm_id = $2
+       FOR UPDATE OF dl`,
+      [req.params.id, farmId]
+    );
+
+    if (before.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Log not found' });
+    }
+
+    const targetBatchId = batchId || before.rows[0].batch_id;
+    const batch = await client.query(
+      'SELECT id FROM batches WHERE id = $1 AND farm_id = $2',
+      [targetBatchId, farmId]
+    );
+
+    if (batch.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    const buildingRecord = await getBuilding(client, building);
+
+    if (!buildingRecord) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Select a specific building for employee daily logs.' });
+    }
+
+    const employee = await client.query(
+      `SELECT id, COALESCE(display_name, name) AS "employeeName", metadata
+       FROM stakeholders
+       WHERE id = $1
+         AND farm_id = $2
+         AND type = 'Employee'
+         AND is_active = true`,
+      [employeeId, farmId]
+    );
+
+    if (employee.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    const assignedBuilding = employee.rows[0].metadata?.assignedBuilding || '';
+    if (assignedBuilding && assignedBuilding.toLowerCase() !== buildingRecord.name.toLowerCase()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `${employee.rows[0].employeeName} is assigned to Building ${assignedBuilding}.` });
+    }
+
+    const compensation = await client.query(
+      `SELECT handled_birds
+       FROM employee_batch_compensations
+       WHERE batch_id = $1
+         AND employee_id = $2`,
+      [targetBatchId, employeeId]
+    );
+    const handledBirdsSnapshot = Number(handledBirds || compensation.rows[0]?.handled_birds || before.rows[0].handled_birds_snapshot || 0);
+    const feedQuantity = Number(feed || 0);
+    const mortalityQuantity = Number(mortality || 0);
+    let selectedFeedItem = null;
+
+    if (feedQuantity > 0) {
+      selectedFeedItem = feedItemId
+        ? await getInventoryItem(client, farmId, feedItemId)
+        : await getInventoryItemByName(client, farmId, 'Starter Feed');
+
+      if (!selectedFeedItem || selectedFeedItem.category !== 'Feed') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Select a valid feed inventory item for feed consumption.' });
+      }
+    }
+
+    const result = await client.query(
+      `UPDATE daily_logs
+       SET batch_id = $1,
+           date = $2,
+           building_id = $3,
+           employee_id = $4,
+           handled_birds_snapshot = $5,
+           feed_item_id = $6,
+           feed_consumed = $7,
+           mortality = $8,
+           average_weight_g = $9,
+           remarks = $10,
+           updated_at = now()
+       WHERE id = $11
+       RETURNING
+         id,
+         batch_id AS "batchId",
+         date,
+         feed_item_id AS "feedItemId",
+         feed_consumed AS feed,
+         mortality,
+         handled_birds_snapshot AS "handledBirds",
+         average_weight_g AS "averageWeightGrams",
+         remarks`,
+      [
+        targetBatchId,
+        date,
+        buildingRecord.id,
+        employeeId,
+        handledBirdsSnapshot,
+        selectedFeedItem?.id || null,
+        feedQuantity,
+        mortalityQuantity,
+        averageWeightGrams === '' || averageWeightGrams == null ? null : Number(averageWeightGrams),
+        remarks || null,
+        req.params.id,
+      ]
+    );
+
+    await client.query(
+      `DELETE FROM inventory_movements
+       WHERE source_type IN ('daily_log_feed', 'daily_log_mortality')
+         AND source_id = $1`,
+      [String(req.params.id)]
+    );
+
+    if (selectedFeedItem && feedQuantity > 0) {
+      await insertInventoryMovement(client, req, {
+        farmId,
+        batchId: targetBatchId,
+        itemId: selectedFeedItem.id,
+        movementDate: date,
+        movementType: 'Stock Out',
+        quantity: feedQuantity,
+        building: buildingRecord.name,
+        sourceType: 'daily_log_feed',
+        sourceId: req.params.id,
+        remarks: `Feed consumed by ${employee.rows[0].employeeName}`,
+      });
+    }
+
+    if (mortalityQuantity > 0) {
+      const chicksItem = await getInventoryItemByName(client, farmId, 'DOC Chicks');
+
+      if (chicksItem) {
+        await insertInventoryMovement(client, req, {
+          farmId,
+          batchId: targetBatchId,
+          itemId: chicksItem.id,
+          movementDate: date,
+          movementType: 'Stock Out',
+          quantity: mortalityQuantity,
+          building: buildingRecord.name,
+          sourceType: 'daily_log_mortality',
+          sourceId: req.params.id,
+          remarks: `Mortality recorded for ${employee.rows[0].employeeName}`,
+        });
+      }
+    }
+
+    const dailyLog = {
+      ...result.rows[0],
+      date: toDateOnly(result.rows[0].date),
+      building: buildingRecord.name,
+      employeeId: Number(employeeId),
+      employeeName: employee.rows[0].employeeName,
+      feedItemName: selectedFeedItem?.name || '',
+      feed: toNumber(result.rows[0].feed),
+    };
+
+    await auditLog(client, req, 'update', 'daily_log', req.params.id, before.rows[0], dailyLog, targetBatchId);
+    await client.query('COMMIT');
+
+    res.json(mapDailyLog(dailyLog));
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.delete('/api/logs/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const client = await pool.connect();
 
@@ -3527,7 +3992,7 @@ app.delete('/api/logs/:id', authenticate, requirePrimaryOwner, async (req, res) 
        LEFT JOIN buildings b ON b.id = dl.building_id
        LEFT JOIN stakeholders s ON s.id = dl.employee_id
        WHERE dl.id = $1
-       FOR UPDATE`,
+       FOR UPDATE OF dl`,
       [req.params.id]
     );
 
