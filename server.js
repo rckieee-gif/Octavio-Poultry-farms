@@ -181,7 +181,7 @@ function requireMinimumRole(minimumRole) {
 
 function requirePrimaryOwner(req, res, next) {
   if (!req.user?.is_primary_owner) {
-    return res.status(403).json({ error: 'Only the primary owner can manage user accounts.' });
+    return res.status(403).json({ error: 'Only admin.roland can perform this action.' });
   }
   next();
 }
@@ -2311,7 +2311,7 @@ app.post('/api/employees', authenticate, requireMinimumRole('OperationManager'),
   }
 });
 
-app.patch('/api/employees/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.patch('/api/employees/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const {
     name,
     displayName,
@@ -2405,7 +2405,7 @@ app.patch('/api/employees/:id', authenticate, requireMinimumRole('OperationManag
   }
 });
 
-app.delete('/api/employees/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.delete('/api/employees/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -2473,7 +2473,7 @@ app.get('/api/batches/:batchId/employee-compensations', authenticate, requireMin
   }
 });
 
-app.put('/api/batches/:batchId/employee-compensations/:employeeId', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.put('/api/batches/:batchId/employee-compensations/:employeeId', authenticate, requirePrimaryOwner, async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -2760,7 +2760,7 @@ app.post('/api/batches', authenticate, requireMinimumRole('OperationManager'), a
   }
 });
 
-app.patch('/api/batches/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.patch('/api/batches/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const { id } = req.params;
   const {
     startDate,
@@ -2847,7 +2847,7 @@ app.patch('/api/batches/:id', authenticate, requireMinimumRole('OperationManager
   }
 });
 
-app.delete('/api/batches/:id', authenticate, requireMinimumRole('AdminOwner'), async (req, res) => {
+app.delete('/api/batches/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const { id } = req.params;
   const client = await pool.connect();
 
@@ -2895,7 +2895,7 @@ app.get('/api/batches/:batchId/loadings', authenticate, async (req, res) => {
   }
 });
 
-app.put('/api/batches/:batchId/loadings', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.put('/api/batches/:batchId/loadings', authenticate, requirePrimaryOwner, async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -2957,15 +2957,15 @@ app.post('/api/batches/:batchId/transactions', authenticate, requireMinimumRole(
   await createTransaction(req, res, req.params.batchId);
 });
 
-app.patch('/api/batches/:batchId/transactions/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.patch('/api/batches/:batchId/transactions/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   await updateTransaction(req, res, req.params.batchId, req.params.id);
 });
 
-app.post('/api/batches/:batchId/transactions/:id/void', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.post('/api/batches/:batchId/transactions/:id/void', authenticate, requirePrimaryOwner, async (req, res) => {
   await voidTransaction(req, res, req.params.id, req.params.batchId);
 });
 
-app.delete('/api/transactions/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.delete('/api/transactions/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   await voidTransaction(req, res, req.params.id);
 });
 
@@ -3092,7 +3092,7 @@ app.post('/api/inventory/items', authenticate, requireMinimumRole('OperationMana
   }
 });
 
-app.patch('/api/inventory/items/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.patch('/api/inventory/items/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const { name, category, unit, targetQuantity, reorderLevel, isActive = true } = req.body;
 
   try {
@@ -3513,7 +3513,7 @@ app.post('/api/logs', authenticate, requireMinimumRole('DataEntry'), async (req,
   }
 });
 
-app.delete('/api/logs/:id', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+app.delete('/api/logs/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   const client = await pool.connect();
 
   try {
