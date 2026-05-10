@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -450,9 +450,9 @@ function mapInventoryItem(row) {
   const currentStock = Number(row.currentStock ?? row.current_stock ?? 0);
   const targetQuantity = Number(row.targetQuantity ?? row.target_quantity ?? 0);
   const reorderLevel = Number(row.reorderLevel ?? row.reorder_level ?? 0);
-  const needsWarning =
-    (targetQuantity > 0 && currentStock < targetQuantity)
-    || (reorderLevel > 0 && currentStock <= reorderLevel);
+  const lowStockWarning = reorderLevel > 0 && currentStock < reorderLevel;
+  const neededStockWarning = targetQuantity > 0 && currentStock < targetQuantity;
+  const warningType = lowStockWarning ? 'low-stock' : neededStockWarning ? 'needed-stock' : 'ok';
 
   return {
     id: row.id,
@@ -462,7 +462,8 @@ function mapInventoryItem(row) {
     targetQuantity,
     reorderLevel,
     currentStock,
-    needsWarning,
+    needsWarning: warningType !== 'ok',
+    warningType,
     isActive: row.isActive ?? row.is_active ?? true,
   };
 }
@@ -1978,6 +1979,897 @@ app.delete('/api/admin/users/:id', authenticate, requirePrimaryOwner, async (req
   }
 });
 
+function normalizeImportKey(key) {
+  return String(key || '')
+    .trim()
+    .replace(/^\uFEFF/, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+}
+
+function parseCsvRows(text) {
+  const input = String(text || '').replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [];
+  let value = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    const next = input[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === ',' && !inQuotes) {
+      row.push(value);
+      value = '';
+      continue;
+    }
+
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = '';
+      continue;
+    }
+
+    value += char;
+  }
+
+  row.push(value);
+  rows.push(row);
+
+  const nonEmptyRows = rows.filter((entry) => entry.some((cell) => String(cell || '').trim() !== ''));
+  if (nonEmptyRows.length === 0) return [];
+
+  const headers = nonEmptyRows[0].map(normalizeImportKey);
+
+  return nonEmptyRows.slice(1).map((entry) => headers.reduce((record, header, index) => {
+    if (header) record[header] = entry[index] === undefined ? '' : entry[index];
+    return record;
+  }, {}));
+}
+
+function createImportStats(label) {
+  return { label, rowsRead: 0, created: 0, updated: 0, skipped: 0, warnings: [] };
+}
+
+function addImportWarning(stats, message) {
+  if (stats.warnings.length < 10) stats.warnings.push(message);
+}
+
+function isBlank(value) {
+  return value === undefined || value === null || String(value).trim() === '';
+}
+
+function getImportValue(row, ...keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(row, key) && !isBlank(row[key])) return row[key];
+    const normalizedKey = normalizeImportKey(key);
+    if (Object.prototype.hasOwnProperty.call(row, normalizedKey) && !isBlank(row[normalizedKey])) return row[normalizedKey];
+  }
+
+  return null;
+}
+
+function getImportText(row, ...keys) {
+  const value = getImportValue(row, ...keys);
+  return value === null ? '' : String(value).trim();
+}
+
+function getImportNumber(row, ...keys) {
+  const value = getImportValue(row, ...keys);
+  if (value === null) return null;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function getImportBoolean(row, ...keys) {
+  const value = getImportValue(row, ...keys);
+  if (value === null) return false;
+  return ['true', '1', 'yes', 'y'].includes(String(value).trim().toLowerCase());
+}
+
+function getImportDate(row, ...keys) {
+  const value = getImportValue(row, ...keys);
+  return value ? toDateOnly(value) : null;
+}
+
+async function resetImportSequence(client, tableName, columnName = 'id') {
+  const allowedTables = new Set([
+    'daily_logs',
+    'employee_batch_compensations',
+    'inventory_items',
+    'inventory_movements',
+    'stakeholders',
+  ]);
+
+  if (!allowedTables.has(tableName)) return;
+
+  await client.query(
+    `SELECT setval(
+       pg_get_serial_sequence('public.${tableName}', '${columnName}'),
+       GREATEST(COALESCE((SELECT MAX(${columnName}) FROM ${tableName}), 1), 1),
+       true
+     )`
+  );
+}
+
+async function batchExists(client, farmId, batchId) {
+  if (!batchId) return false;
+  const result = await client.query(
+    'SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1',
+    [batchId, farmId]
+  );
+  return result.rowCount > 0;
+}
+
+async function upsertImportedBatch(client, req, farmId, row, stats) {
+  const batchId = getImportText(row, 'id', 'batch_id');
+  const startDate = getImportDate(row, 'start_date', 'startDate');
+
+  if (!batchId || !startDate) {
+    stats.skipped += 1;
+    addImportWarning(stats, 'Skipped batch row without id or start date.');
+    return null;
+  }
+
+  const before = await client.query('SELECT id FROM batches WHERE id = $1', [batchId]);
+
+  await client.query(
+    `INSERT INTO batches
+       (id, farm_id, start_date, target_harvest_date, actual_harvest_end_date, status,
+        total_chicks_loaded, planned_flock, target_feed_kg, notes, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (id)
+     DO UPDATE SET
+       farm_id = EXCLUDED.farm_id,
+       start_date = EXCLUDED.start_date,
+       target_harvest_date = EXCLUDED.target_harvest_date,
+       actual_harvest_end_date = EXCLUDED.actual_harvest_end_date,
+       status = EXCLUDED.status,
+       total_chicks_loaded = EXCLUDED.total_chicks_loaded,
+       planned_flock = EXCLUDED.planned_flock,
+       target_feed_kg = EXCLUDED.target_feed_kg,
+       notes = EXCLUDED.notes,
+       updated_at = now()`,
+    [
+      batchId,
+      farmId,
+      startDate,
+      getImportDate(row, 'target_harvest_date', 'targetHarvestDate'),
+      getImportDate(row, 'actual_harvest_end_date', 'actualHarvestEndDate'),
+      getImportText(row, 'status') || 'ONGOING',
+      Math.round(getImportNumber(row, 'total_chicks_loaded', 'totalChicksLoaded') || 0),
+      Math.round(getImportNumber(row, 'planned_flock', 'plannedFlock') || 0),
+      getImportNumber(row, 'target_feed_kg', 'targetFeedKg') || 0,
+      getImportText(row, 'notes'),
+      req.user.id,
+    ]
+  );
+
+  stats[before.rowCount ? 'updated' : 'created'] += 1;
+  return batchId;
+}
+
+async function upsertImportedLoading(client, row, batchId, stats) {
+  const buildingName = getImportText(row, 'building', 'building_name');
+  if (!batchId || !buildingName) {
+    stats.skipped += 1;
+    return;
+  }
+
+  const building = await getBuilding(client, buildingName);
+  const before = await client.query(
+    'SELECT id FROM batch_building_loadings WHERE batch_id = $1 AND building_id = $2',
+    [batchId, building.id]
+  );
+
+  await client.query(
+    `INSERT INTO batch_building_loadings
+       (batch_id, building_id, loading_date, chicks_loaded, loading_share_pct, remarks)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (batch_id, building_id)
+     DO UPDATE SET
+       loading_date = EXCLUDED.loading_date,
+       chicks_loaded = EXCLUDED.chicks_loaded,
+       loading_share_pct = EXCLUDED.loading_share_pct,
+       remarks = EXCLUDED.remarks`,
+    [
+      batchId,
+      building.id,
+      getImportDate(row, 'loading_date', 'loadingDate') || new Date().toISOString().slice(0, 10),
+      Math.round(getImportNumber(row, 'chicks_loaded', 'chicksLoaded') || 0),
+      getImportNumber(row, 'loading_share_pct', 'loadingSharePct'),
+      getImportText(row, 'remarks'),
+    ]
+  );
+
+  stats[before.rowCount ? 'updated' : 'created'] += 1;
+}
+
+async function upsertImportedInventoryItem(client, farmId, row, stats, itemIdMap = new Map()) {
+  const originalId = getImportNumber(row, 'id', 'item_id');
+  const name = getImportText(row, 'name', 'item', 'item_name', 'feed_item');
+
+  if (!name) {
+    stats.skipped += 1;
+    addImportWarning(stats, 'Skipped inventory item without a name.');
+    return null;
+  }
+
+  const category = getImportText(row, 'category') || (normalizeImportKey(name).includes('feed') ? 'Feed' : 'Supplies');
+  const unit = getImportText(row, 'unit') || (category === 'Feed' ? 'sacks' : 'pcs');
+  const targetQuantity = getImportNumber(row, 'target_quantity', 'targetQuantity') || 0;
+  const reorderLevel = getImportNumber(row, 'reorder_level', 'reorderLevel') || 0;
+  let existing = null;
+
+  if (originalId) {
+    existing = await client.query(
+      'SELECT id FROM inventory_items WHERE id = $1 AND farm_id = $2 LIMIT 1',
+      [originalId, farmId]
+    );
+  }
+
+  if (!existing?.rowCount) {
+    existing = await client.query(
+      'SELECT id FROM inventory_items WHERE farm_id = $1 AND lower(name) = lower($2) LIMIT 1',
+      [farmId, name]
+    );
+  }
+
+  if (existing.rowCount > 0) {
+    const itemId = existing.rows[0].id;
+    await client.query(
+      `UPDATE inventory_items
+       SET name = $1,
+           category = $2,
+           unit = $3,
+           target_quantity = $4,
+           reorder_level = $5,
+           is_active = true,
+           updated_at = now()
+       WHERE id = $6`,
+      [name, category, unit, targetQuantity, reorderLevel, itemId]
+    );
+    if (originalId) itemIdMap.set(Number(originalId), itemId);
+    stats.updated += 1;
+    return itemId;
+  }
+
+  let inserted;
+  if (originalId) {
+    const idTaken = await client.query('SELECT id FROM inventory_items WHERE id = $1 LIMIT 1', [originalId]);
+    if (idTaken.rowCount === 0) {
+      inserted = await client.query(
+        `INSERT INTO inventory_items
+           (id, farm_id, name, category, unit, target_quantity, reorder_level)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [originalId, farmId, name, category, unit, targetQuantity, reorderLevel]
+      );
+    }
+  }
+
+  if (!inserted) {
+    inserted = await client.query(
+      `INSERT INTO inventory_items
+         (farm_id, name, category, unit, target_quantity, reorder_level)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [farmId, name, category, unit, targetQuantity, reorderLevel]
+    );
+  }
+
+  const itemId = inserted.rows[0].id;
+  if (originalId) itemIdMap.set(Number(originalId), itemId);
+  stats.created += 1;
+  return itemId;
+}
+
+async function upsertImportedEmployee(client, req, farmId, row, stats, employeeIdMap = new Map()) {
+  const originalId = getImportNumber(row, 'id', 'employee_id');
+  const name = getImportText(row, 'name', 'employee', 'employee_name', 'display_name');
+
+  if (!name) {
+    stats.skipped += 1;
+    addImportWarning(stats, 'Skipped employee row without a name.');
+    return null;
+  }
+
+  const metadata = row.metadata && typeof row.metadata === 'object'
+    ? row.metadata
+    : buildEmployeeMetadata({
+        position: getImportText(row, 'position'),
+        hireDate: getImportDate(row, 'hire_date', 'hireDate') || '',
+        assignedBuilding: getImportText(row, 'assigned_building', 'assignedBuilding'),
+        notes: getImportText(row, 'notes'),
+      });
+
+  let existing = null;
+  if (originalId) {
+    existing = await client.query(
+      'SELECT id FROM stakeholders WHERE id = $1 AND farm_id = $2 LIMIT 1',
+      [originalId, farmId]
+    );
+  }
+
+  if (!existing?.rowCount) {
+    existing = await client.query(
+      'SELECT id FROM stakeholders WHERE lower(name) = lower($1) LIMIT 1',
+      [name]
+    );
+  }
+
+  if (existing.rowCount > 0) {
+    const employeeId = existing.rows[0].id;
+    await client.query(
+      `UPDATE stakeholders
+       SET name = $1,
+           display_name = $2,
+           type = 'Employee',
+           phone = $3,
+           email = $4,
+           address = $5,
+           metadata = $6,
+           is_active = true
+       WHERE id = $7`,
+      [
+        name,
+        getImportText(row, 'display_name', 'displayName') || name,
+        getImportText(row, 'phone') || null,
+        getImportText(row, 'email') || null,
+        getImportText(row, 'address') || null,
+        JSON.stringify(metadata),
+        employeeId,
+      ]
+    );
+    if (originalId) employeeIdMap.set(Number(originalId), employeeId);
+    stats.updated += 1;
+    return employeeId;
+  }
+
+  let inserted;
+  if (originalId) {
+    const idTaken = await client.query('SELECT id FROM stakeholders WHERE id = $1 LIMIT 1', [originalId]);
+    if (idTaken.rowCount === 0) {
+      inserted = await client.query(
+        `INSERT INTO stakeholders
+           (id, farm_id, name, display_name, type, phone, email, address, metadata)
+         VALUES ($1, $2, $3, $4, 'Employee', $5, $6, $7, $8)
+         RETURNING id`,
+        [
+          originalId,
+          farmId,
+          name,
+          getImportText(row, 'display_name', 'displayName') || name,
+          getImportText(row, 'phone') || null,
+          getImportText(row, 'email') || null,
+          getImportText(row, 'address') || null,
+          JSON.stringify(metadata),
+        ]
+      );
+    }
+  }
+
+  if (!inserted) {
+    inserted = await client.query(
+      `INSERT INTO stakeholders
+         (farm_id, name, display_name, type, phone, email, address, metadata)
+       VALUES ($1, $2, $3, 'Employee', $4, $5, $6, $7)
+       RETURNING id`,
+      [
+        farmId,
+        name,
+        getImportText(row, 'display_name', 'displayName') || name,
+        getImportText(row, 'phone') || null,
+        getImportText(row, 'email') || null,
+        getImportText(row, 'address') || null,
+        JSON.stringify(metadata),
+      ]
+    );
+  }
+
+  const employeeId = inserted.rows[0].id;
+  if (originalId) employeeIdMap.set(Number(originalId), employeeId);
+  await auditLog(client, req, 'import', 'employee', employeeId, null, { name }, null);
+  stats.created += 1;
+  return employeeId;
+}
+
+async function upsertImportedEmployeeCompensation(client, req, farmId, row, employeeId, stats) {
+  const batchId = getImportText(row, 'batch_id', 'batchId');
+  if (!batchId || !employeeId || getImportValue(row, 'handled_birds', 'handledBirds') === null) return;
+
+  if (!(await batchExists(client, farmId, batchId))) {
+    stats.skipped += 1;
+    addImportWarning(stats, `Skipped compensation for missing batch ${batchId}.`);
+    return;
+  }
+
+  const before = await client.query(
+    'SELECT id FROM employee_batch_compensations WHERE batch_id = $1 AND employee_id = $2',
+    [batchId, employeeId]
+  );
+
+  await client.query(
+    `INSERT INTO employee_batch_compensations
+       (farm_id, batch_id, employee_id, handled_birds, rate_per_bird, corpo_group, remarks, created_by_user_id, updated_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+     ON CONFLICT (batch_id, employee_id)
+     DO UPDATE SET
+       handled_birds = EXCLUDED.handled_birds,
+       rate_per_bird = EXCLUDED.rate_per_bird,
+       corpo_group = EXCLUDED.corpo_group,
+       remarks = EXCLUDED.remarks,
+       updated_by_user_id = EXCLUDED.updated_by_user_id,
+       updated_at = now()`,
+    [
+      farmId,
+      batchId,
+      employeeId,
+      normalizeHandledBirds(getImportNumber(row, 'handled_birds', 'handledBirds') || 0),
+      normalizeRatePerBird(getImportNumber(row, 'rate_per_bird', 'ratePerBird') || 1.5),
+      getImportText(row, 'corpo_group', 'corpoGroup') || null,
+      getImportText(row, 'remarks', 'compensation_remarks') || null,
+      req.user.id,
+    ]
+  );
+
+  stats[before.rowCount ? 'updated' : 'created'] += 1;
+}
+
+async function getImportedStakeholderId(client, farmId, row, idKey, nameKey, type, employeeIdMap = new Map()) {
+  const originalId = getImportNumber(row, idKey);
+  if (originalId && employeeIdMap.has(Number(originalId))) return employeeIdMap.get(Number(originalId));
+
+  const name = getImportText(row, `${nameKey}_name`, nameKey);
+  if (name) return ensureStakeholder(client, farmId, name, type);
+
+  if (originalId) {
+    const existing = await client.query(
+      'SELECT id FROM stakeholders WHERE id = $1 AND farm_id = $2 LIMIT 1',
+      [originalId, farmId]
+    );
+    if (existing.rowCount > 0) return existing.rows[0].id;
+  }
+
+  return null;
+}
+
+async function importTransactions(client, req, farmId, rows, stats, employeeIdMap = new Map()) {
+  for (const row of rows) {
+    stats.rowsRead += 1;
+    const batchId = getImportText(row, 'batch_id', 'batchId');
+    const date = getImportDate(row, 'date');
+    const fundingNature = getImportText(row, 'funding_nature', 'fundingNature');
+    const category = getImportText(row, 'category', 'category_name');
+    const description = getImportText(row, 'description');
+
+    if (!batchId || !date || !fundingNature || !category) {
+      stats.skipped += 1;
+      addImportWarning(stats, 'Skipped transaction row missing batch, date, funding, or category.');
+      continue;
+    }
+
+    if (!(await batchExists(client, farmId, batchId))) {
+      stats.skipped += 1;
+      addImportWarning(stats, `Skipped transaction for missing batch ${batchId}.`);
+      continue;
+    }
+
+    const transactionId = getImportText(row, 'transaction_id', 'id') || await generateTransactionCode(client, date, 'IMP');
+    const exists = await client.query('SELECT transaction_id FROM daily_transactions WHERE transaction_id = $1', [transactionId]);
+    const dbFundingNature = normalizeFundingNatureForDb(fundingNature);
+    const transactionType = getImportText(row, 'type') || deriveTransactionType(fundingNature);
+    const buildingName = getImportText(row, 'building') || 'All';
+    const buildingRecord = await getBuilding(client, buildingName);
+    const buildingScope = buildingRecord ? 'Specific' : 'All';
+    const categoryId = await ensureCategory(client, farmId, dbFundingNature, category);
+    const paidById = await getImportedStakeholderId(client, farmId, row, 'paid_by', 'paid_by', 'Owner', employeeIdMap);
+    const paidToId = await getImportedStakeholderId(client, farmId, row, 'paid_to', 'paid_to', 'Supplier', employeeIdMap);
+    const quantity = getImportNumber(row, 'quantity');
+    const unitCost = getImportNumber(row, 'unit_cost', 'unitCost');
+    const amount = getImportNumber(row, 'amount') ?? calculateAmount({ quantity, unitCost, amount: getImportValue(row, 'manual_amount', 'manualAmount') || 0 });
+
+    await client.query(
+      `INSERT INTO daily_transactions
+         (transaction_id, batch_id, date, building_id, building_scope, type, funding_nature,
+          category, category_id, description, quantity, unit_cost, manual_amount, amount,
+          paid_by, paid_to, reference, remarks, is_void, void_reason, created_by_user_id, updated_by_user_id)
+       VALUES
+         ($1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, $18, $19, $20, $21, $21)
+       ON CONFLICT (transaction_id)
+       DO UPDATE SET
+         batch_id = EXCLUDED.batch_id,
+         date = EXCLUDED.date,
+         building_id = EXCLUDED.building_id,
+         building_scope = EXCLUDED.building_scope,
+         type = EXCLUDED.type,
+         funding_nature = EXCLUDED.funding_nature,
+         category = EXCLUDED.category,
+         category_id = EXCLUDED.category_id,
+         description = EXCLUDED.description,
+         quantity = EXCLUDED.quantity,
+         unit_cost = EXCLUDED.unit_cost,
+         manual_amount = EXCLUDED.manual_amount,
+         amount = EXCLUDED.amount,
+         paid_by = EXCLUDED.paid_by,
+         paid_to = EXCLUDED.paid_to,
+         reference = EXCLUDED.reference,
+         remarks = EXCLUDED.remarks,
+         is_void = EXCLUDED.is_void,
+         void_reason = EXCLUDED.void_reason,
+         updated_by_user_id = EXCLUDED.updated_by_user_id,
+         updated_at = now()`,
+      [
+        transactionId,
+        batchId,
+        date,
+        buildingRecord?.id || null,
+        buildingScope,
+        transactionType,
+        dbFundingNature,
+        category,
+        categoryId,
+        description || category,
+        quantity,
+        unitCost,
+        quantity !== null && unitCost !== null ? null : amount,
+        amount,
+        paidById,
+        paidToId,
+        getImportText(row, 'reference') || null,
+        getImportText(row, 'remarks') || null,
+        getImportBoolean(row, 'is_void', 'isVoid'),
+        getImportText(row, 'void_reason', 'voidReason') || null,
+        req.user.id,
+      ]
+    );
+
+    stats[exists.rowCount ? 'updated' : 'created'] += 1;
+  }
+}
+
+async function importEmployees(client, req, farmId, rows, stats, employeeIdMap = new Map()) {
+  for (const row of rows) {
+    stats.rowsRead += 1;
+    const employeeId = await upsertImportedEmployee(client, req, farmId, row, stats, employeeIdMap);
+    await upsertImportedEmployeeCompensation(client, req, farmId, row, employeeId, stats);
+  }
+
+  await resetImportSequence(client, 'stakeholders');
+  await resetImportSequence(client, 'employee_batch_compensations');
+}
+
+async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap = new Map(), itemIdMap = new Map()) {
+  for (const row of rows) {
+    stats.rowsRead += 1;
+    const batchId = getImportText(row, 'batch_id', 'batchId');
+    const date = getImportDate(row, 'date');
+    const buildingName = getImportText(row, 'building');
+
+    if (!batchId || !date || !buildingName) {
+      stats.skipped += 1;
+      addImportWarning(stats, 'Skipped daily log row missing batch, date, or building.');
+      continue;
+    }
+
+    if (!(await batchExists(client, farmId, batchId))) {
+      stats.skipped += 1;
+      addImportWarning(stats, `Skipped daily log for missing batch ${batchId}.`);
+      continue;
+    }
+
+    const building = await getBuilding(client, buildingName);
+    const originalEmployeeId = getImportNumber(row, 'employee_id');
+    const employeeId = originalEmployeeId && employeeIdMap.has(Number(originalEmployeeId))
+      ? employeeIdMap.get(Number(originalEmployeeId))
+      : await ensureStakeholder(client, farmId, getImportText(row, 'employee', 'employee_name'), 'Employee');
+    const originalFeedItemId = getImportNumber(row, 'feed_item_id');
+    let feedItemId = originalFeedItemId && itemIdMap.has(Number(originalFeedItemId))
+      ? itemIdMap.get(Number(originalFeedItemId))
+      : null;
+
+    if (!feedItemId && getImportText(row, 'feed_item')) {
+      feedItemId = await upsertImportedInventoryItem(client, farmId, {
+        name: getImportText(row, 'feed_item'),
+        category: 'Feed',
+        unit: 'sacks',
+      }, createImportStats('feed item'), itemIdMap);
+    }
+
+    if (!employeeId) {
+      stats.skipped += 1;
+      addImportWarning(stats, 'Skipped daily log row without an employee.');
+      continue;
+    }
+
+    const originalId = getImportNumber(row, 'id');
+    const existing = originalId
+      ? await client.query('SELECT id FROM daily_logs WHERE id = $1', [originalId])
+      : { rowCount: 0 };
+    const values = [
+      batchId,
+      date,
+      building.id,
+      employeeId,
+      Math.round(getImportNumber(row, 'handled_birds_snapshot', 'handledBirds') || 0),
+      feedItemId,
+      getImportNumber(row, 'feed_consumed', 'feed') || 0,
+      Math.round(getImportNumber(row, 'mortality') || 0),
+      getImportNumber(row, 'average_weight_g', 'averageWeightGrams'),
+      getImportText(row, 'remarks') || null,
+      req.user.id,
+    ];
+
+    if (existing.rowCount > 0) {
+      await client.query(
+        `UPDATE daily_logs
+         SET batch_id = $1,
+             date = $2,
+             building_id = $3,
+             employee_id = $4,
+             handled_birds_snapshot = $5,
+             feed_item_id = $6,
+             feed_consumed = $7,
+             mortality = $8,
+             average_weight_g = $9,
+             remarks = $10,
+             updated_at = now()
+         WHERE id = $12`,
+        [...values, originalId]
+      );
+      stats.updated += 1;
+      continue;
+    }
+
+    if (originalId) {
+      await client.query(
+        `INSERT INTO daily_logs
+           (id, batch_id, date, building_id, employee_id, handled_birds_snapshot,
+            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, created_by_user_id)
+         VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [...values, originalId]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO daily_logs
+           (batch_id, date, building_id, employee_id, handled_birds_snapshot,
+            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        values
+      );
+    }
+
+    stats.created += 1;
+  }
+
+  await resetImportSequence(client, 'daily_logs');
+}
+
+async function importInventoryMovements(client, req, farmId, rows, stats, itemIdMap = new Map()) {
+  for (const row of rows) {
+    stats.rowsRead += 1;
+    const batchId = getImportText(row, 'batch_id', 'batchId') || null;
+    const movementDate = getImportDate(row, 'movement_date', 'movementDate');
+    const movementType = getImportText(row, 'movement_type', 'movementType');
+    const quantity = getImportNumber(row, 'quantity');
+
+    if (!movementDate || !movementType || quantity === null) {
+      stats.skipped += 1;
+      addImportWarning(stats, 'Skipped inventory movement without date, type, or quantity.');
+      continue;
+    }
+
+    if (batchId && !(await batchExists(client, farmId, batchId))) {
+      stats.skipped += 1;
+      addImportWarning(stats, `Skipped inventory movement for missing batch ${batchId}.`);
+      continue;
+    }
+
+    const originalItemId = getImportNumber(row, 'item_id');
+    const itemId = originalItemId && itemIdMap.has(Number(originalItemId))
+      ? itemIdMap.get(Number(originalItemId))
+      : await upsertImportedInventoryItem(client, farmId, row, createImportStats('inventory item'), itemIdMap);
+
+    if (!itemId) {
+      stats.skipped += 1;
+      continue;
+    }
+
+    const building = await getBuilding(client, getImportText(row, 'building') || 'All');
+    const sourceType = getImportText(row, 'source_type', 'sourceType') || null;
+    const sourceId = getImportText(row, 'source_id', 'sourceId') || null;
+    const linkedTransactionId = getImportText(row, 'linked_transaction_id', 'linkedTransactionId') || null;
+    const linkedExists = linkedTransactionId
+      ? await client.query('SELECT transaction_id FROM daily_transactions WHERE transaction_id = $1 LIMIT 1', [linkedTransactionId])
+      : { rowCount: 0 };
+    const originalId = getImportNumber(row, 'id');
+    let existing = { rowCount: 0 };
+
+    if (sourceType && sourceId) {
+      existing = await client.query(
+        `SELECT id
+         FROM inventory_movements
+         WHERE source_type = $1
+           AND source_id = $2
+           AND item_id = $3
+         LIMIT 1`,
+        [sourceType, sourceId, itemId]
+      );
+    }
+
+    if (!existing.rowCount && originalId) {
+      existing = await client.query('SELECT id FROM inventory_movements WHERE id = $1 LIMIT 1', [originalId]);
+    }
+
+    const values = [
+      farmId,
+      batchId,
+      itemId,
+      movementDate,
+      movementType,
+      quantity,
+      getImportNumber(row, 'unit_cost', 'unitCost'),
+      getImportNumber(row, 'amount'),
+      building?.id || null,
+      sourceType,
+      sourceId,
+      linkedExists.rowCount ? linkedTransactionId : null,
+      getImportText(row, 'remarks') || null,
+      req.user.id,
+    ];
+
+    if (existing.rowCount > 0) {
+      await client.query(
+        `UPDATE inventory_movements
+         SET farm_id = $1,
+             batch_id = $2,
+             item_id = $3,
+             movement_date = $4,
+             movement_type = $5,
+             quantity = $6,
+             unit_cost = $7,
+             amount = $8,
+             building_id = $9,
+             source_type = $10,
+             source_id = $11,
+             linked_transaction_id = $12,
+             remarks = $13
+         WHERE id = $15`,
+        [...values, existing.rows[0].id]
+      );
+      stats.updated += 1;
+      continue;
+    }
+
+    if (originalId) {
+      await client.query(
+        `INSERT INTO inventory_movements
+           (id, farm_id, batch_id, item_id, movement_date, movement_type, quantity,
+            unit_cost, amount, building_id, source_type, source_id, linked_transaction_id,
+            remarks, created_by_user_id)
+         VALUES ($15, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [...values, originalId]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO inventory_movements
+           (farm_id, batch_id, item_id, movement_date, movement_type, quantity,
+            unit_cost, amount, building_id, source_type, source_id, linked_transaction_id,
+            remarks, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        values
+      );
+    }
+
+    stats.created += 1;
+  }
+
+  await resetImportSequence(client, 'inventory_items');
+  await resetImportSequence(client, 'inventory_movements');
+}
+
+async function importBatchArchive(client, req, farmId, archive) {
+  const summary = {
+    batches: createImportStats('Batch'),
+    loadings: createImportStats('Loadings'),
+    employees: createImportStats('Employees'),
+    inventoryItems: createImportStats('Inventory Items'),
+    transactions: createImportStats('Ledger Transactions'),
+    dailyLogs: createImportStats('Daily Logs'),
+    inventoryMovements: createImportStats('Inventory Movements'),
+  };
+  const batches = Array.isArray(archive?.batches) ? archive.batches : [];
+
+  if (batches.length !== 1) {
+    throw new Error('Single batch import requires an archive JSON with exactly one batch.');
+  }
+
+  const itemIdMap = new Map();
+  const employeeIdMap = new Map();
+  const batchId = await upsertImportedBatch(client, req, farmId, batches[0], summary.batches);
+
+  for (const row of archive.inventoryItems || []) {
+    summary.inventoryItems.rowsRead += 1;
+    await upsertImportedInventoryItem(client, farmId, row, summary.inventoryItems, itemIdMap);
+  }
+
+  for (const row of archive.loadings || []) {
+    summary.loadings.rowsRead += 1;
+    await upsertImportedLoading(client, row, getImportText(row, 'batch_id') || batchId, summary.loadings);
+  }
+
+  await importEmployees(client, req, farmId, archive.employees || [], summary.employees, employeeIdMap);
+  await importTransactions(client, req, farmId, archive.transactions || [], summary.transactions, employeeIdMap);
+  await importDailyLogs(client, req, farmId, archive.dailyLogs || archive.daily_logs || [], summary.dailyLogs, employeeIdMap, itemIdMap);
+  await importInventoryMovements(client, req, farmId, archive.inventoryMovements || archive.inventory_movements || [], summary.inventoryMovements, itemIdMap);
+
+  return summary;
+}
+
+app.post('/api/settings/import', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+  const { importType, content, filename } = req.body || {};
+
+  if (!importType || !content) {
+    return res.status(400).json({ error: 'Import type and file content are required.' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const itemIdMap = new Map();
+    const employeeIdMap = new Map();
+    let summary;
+
+    if (importType === 'batch_archive') {
+      summary = await importBatchArchive(client, req, farmId, JSON.parse(content));
+    } else {
+      const rows = parseCsvRows(content);
+      summary = { [importType]: createImportStats(importType) };
+
+      if (importType === 'transactions') {
+        await importTransactions(client, req, farmId, rows, summary[importType], employeeIdMap);
+      } else if (importType === 'daily_logs') {
+        await importDailyLogs(client, req, farmId, rows, summary[importType], employeeIdMap, itemIdMap);
+      } else if (importType === 'inventory') {
+        await importInventoryMovements(client, req, farmId, rows, summary[importType], itemIdMap);
+      } else if (importType === 'employees') {
+        await importEmployees(client, req, farmId, rows, summary[importType], employeeIdMap);
+      } else {
+        throw new Error('Unknown import type.');
+      }
+    }
+
+    await auditLog(client, req, 'import', 'settings_file', filename || importType, null, { importType, summary });
+    await client.query('COMMIT');
+    res.json({ message: 'Import complete.', importType, filename: filename || '', summary });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Failed to import settings data:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/api/settings/export', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   const dataset = req.query.dataset || 'transactions';
   const batchId = req.query.batchId || null;
@@ -2079,6 +2971,7 @@ app.get('/api/settings/export', authenticate, requireMinimumRole('OperationManag
            im.amount,
            COALESCE(b.name, 'All') AS building,
            im.source_type,
+           im.source_id,
            im.linked_transaction_id,
            im.remarks,
            im.created_at
