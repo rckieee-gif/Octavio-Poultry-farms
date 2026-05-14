@@ -5,6 +5,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { parseQuickEntryWithAi } = require('./lib/quickEntryAiParser');
 
 const app = express();
 
@@ -4094,6 +4095,31 @@ app.get('/api/transactions', authenticate, requireMinimumRole('OperationManager'
 app.get('/api/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
     res.json(await getTransactions(req.params.batchId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/quick-entry', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+  const { text, today, building, paidBy } = req.body;
+
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'Transaction text is required.' });
+  }
+
+  try {
+    const result = await parseQuickEntryWithAi(text, {
+      today,
+      building,
+      paidBy,
+    });
+
+    res.json({
+      parsed: result.parsed,
+      needsReview: result.parsed.confidence < 0.75 || result.parsed.amount == null,
+      parserMode: result.parserMode,
+      parserWarning: result.parserWarning,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
