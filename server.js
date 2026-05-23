@@ -1237,8 +1237,10 @@ async function insertLinkedLedgerTransaction(client, req, {
   const buildingScope = buildingRecord ? 'Specific' : 'All';
   const buildingKey = buildingRecord ? buildingRecord.name : 'ALL';
   const categoryId = await ensureCategory(client, farmId, dbFundingNature, category);
-  const paidById = await ensureStakeholder(client, farmId, paidBy, 'Owner');
-  const paidToId = await ensureStakeholder(client, farmId, paidTo, 'Supplier');
+  const paidToRole = (category === 'Cash Advance' || category === 'Labor') ? 'Employee' : 'Supplier';
+  const paidByRole = (category === 'Reimbursement' && (fundingNature === 'Receivable' || dbFundingNature === 'Receivable')) ? 'Employee' : 'Owner';
+  const paidById = await ensureStakeholder(client, farmId, paidBy, paidByRole);
+  const paidToId = await ensureStakeholder(client, farmId, paidTo, paidToRole);
   const computedAmount = calculateAmount({ quantity, unitCost, amount });
   const transactionCode = await generateTransactionCode(client, date, buildingKey);
 
@@ -1318,8 +1320,10 @@ async function createTransaction(req, res, batchIdFromRoute = null) {
     const buildingScope = buildingRecord ? 'Specific' : 'All';
     const buildingKey = buildingRecord ? buildingRecord.name : 'ALL';
     const categoryId = await ensureCategory(client, farmId, dbFundingNature, category);
-    const paidById = await ensureStakeholder(client, farmId, paidBy, 'Owner');
-    const paidToId = await ensureStakeholder(client, farmId, paidTo, 'Supplier');
+    const paidToRole = (category === 'Cash Advance' || category === 'Labor') ? 'Employee' : 'Supplier';
+    const paidByRole = (category === 'Reimbursement' && (fundingNature === 'Receivable' || dbFundingNature === 'Receivable')) ? 'Employee' : 'Owner';
+    const paidById = await ensureStakeholder(client, farmId, paidBy, paidByRole);
+    const paidToId = await ensureStakeholder(client, farmId, paidTo, paidToRole);
     const computedAmount = calculateAmount({ quantity, unitCost, amount });
     const transactionCode = await generateTransactionCode(client, date, buildingKey);
 
@@ -1452,8 +1456,10 @@ async function updateTransaction(req, res, batchId, transactionId) {
     const buildingRecord = await getBuilding(client, building);
     const buildingScope = buildingRecord ? 'Specific' : 'All';
     const categoryId = await ensureCategory(client, farmId, dbFundingNature, category);
-    const paidById = await ensureStakeholder(client, farmId, paidBy, 'Owner');
-    const paidToId = await ensureStakeholder(client, farmId, paidTo, 'Supplier');
+    const paidToRole = (category === 'Cash Advance' || category === 'Labor') ? 'Employee' : 'Supplier';
+    const paidByRole = (category === 'Reimbursement' && (fundingNature === 'Receivable' || dbFundingNature === 'Receivable')) ? 'Employee' : 'Owner';
+    const paidById = await ensureStakeholder(client, farmId, paidBy, paidByRole);
+    const paidToId = await ensureStakeholder(client, farmId, paidTo, paidToRole);
     const computedAmount = calculateAmount({ quantity, unitCost, amount });
 
     const result = await client.query(
