@@ -491,6 +491,397 @@ function mapInventoryMovement(row) {
   };
 }
 
+const DEFAULT_CHICKEN_SALES_ROWS = [
+  ['SQ', 132, 125],
+  ['US', 140, 133],
+  ['PS1', 148, 145],
+  ['PS2', 148, 145],
+  ['PS3', 148, 145],
+  ['PS4', 148, 145],
+  ['OS1', 144, 141],
+  ['OS2', 144, 141],
+  ['OS3', 142, 137],
+  ['OS4', 142, 137],
+  ['C1', 138, 135],
+  ['C2', 138, 135],
+].map(([item, basePricePerKg, finalRate], index) => ({
+  item,
+  basePricePerKg,
+  harvest1Birds: 0,
+  harvest1Kilos: 0,
+  harvest2Birds: 0,
+  harvest2Kilos: 0,
+  harvest3Birds: 0,
+  harvest3Kilos: 0,
+  finalRate,
+  notes: '',
+  sortOrder: index + 1,
+}));
+
+const DEFAULT_BYPRODUCT_ROWS = [
+  ['GZ(Gizzard)', 53, 116],
+  ['LV(Liver)', 121, 121],
+  ['FT(Feet)', 53, 53],
+  ['HD(Head)', 28, 28],
+  ['SI(Small Intestine)', 53, 53],
+  ['LI(Large Intestine)', 121, 63],
+  ['CRPs(Crops)', 53, 53],
+  ['PV(Provent)', 63, 63],
+  ['FA(Fats)', 43, 43],
+  ['SP(Spleen)', 53, 53],
+  ['RI(R. Intestine)', 58, 58],
+  ['TRA(Tranchea)', 23, 23],
+].map(([item, originalRate, finalRate], index) => ({
+  item,
+  originalRate,
+  harvest1Qty: 0,
+  harvest1Sales: 0,
+  harvest2Qty: 0,
+  harvest2Sales: 0,
+  harvest3Qty: 0,
+  harvest3Sales: 0,
+  finalRate,
+  notes: '',
+  sortOrder: index + 1,
+}));
+
+const DEFAULT_FINANCING_ROWS = [
+  ['Feeds Booster', 'Feed'],
+  ['Feeds Starter', 'Feed'],
+  ['Feeds Grower', 'Feed'],
+  ['DOCs', 'DOC'],
+  ['Medicines', 'Medicine'],
+  ['Paper', 'Brooding Paper'],
+].map(([item, category], index) => ({
+  item,
+  category,
+  quantity: '',
+  unitCost: '',
+  amount: '',
+  notes: '',
+  sortOrder: index + 1,
+}));
+
+function toFiniteNumber(value, fallback = 0) {
+  if (value === '' || value === undefined || value === null) return fallback;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function toNullableFiniteNumber(value) {
+  if (value === '' || value === undefined || value === null) return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function roundMoney(value) {
+  return Number(toFiniteNumber(value).toFixed(2));
+}
+
+function addDays(dateText, days) {
+  if (!dateText) return '';
+  const date = new Date(`${dateText}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getDefaultHarvestEvents(batch) {
+  const firstHarvestDate = toDateOnly(batch?.targetHarvestDate || batch?.target_harvest_date || batch?.actualHarvestEndDate || batch?.actual_harvest_end_date);
+
+  return [0, 1, 2].map((_, index) => ({
+    harvestOrder: index + 1,
+    harvestDate: index === 0 ? firstHarvestDate || '' : '',
+    permitShipping: 0,
+    tollingFee: 0,
+    remarks: '',
+  }));
+}
+
+function mapHarvestEvent(row) {
+  return {
+    id: row.id || null,
+    harvestOrder: Number(row.harvestOrder || row.harvest_order || 0),
+    harvestDate: toDateOnly(row.harvestDate || row.harvest_date) || '',
+    permitShipping: toFiniteNumber(row.permitShipping ?? row.permit_shipping),
+    tollingFee: toFiniteNumber(row.tollingFee ?? row.tolling_fee),
+    remarks: row.remarks || '',
+  };
+}
+
+function mapHarvestChickenSale(row) {
+  return {
+    id: row.id || null,
+    item: row.item || '',
+    basePricePerKg: row.basePricePerKg ?? row.base_price_per_kg ?? '',
+    harvest1Birds: Number(row.harvest1Birds ?? row.harvest1_birds ?? 0),
+    harvest1Kilos: toFiniteNumber(row.harvest1Kilos ?? row.harvest1_kilos),
+    harvest2Birds: Number(row.harvest2Birds ?? row.harvest2_birds ?? 0),
+    harvest2Kilos: toFiniteNumber(row.harvest2Kilos ?? row.harvest2_kilos),
+    harvest3Birds: Number(row.harvest3Birds ?? row.harvest3_birds ?? 0),
+    harvest3Kilos: toFiniteNumber(row.harvest3Kilos ?? row.harvest3_kilos),
+    finalRate: row.finalRate ?? row.final_rate ?? '',
+    notes: row.notes || '',
+    sortOrder: Number(row.sortOrder ?? row.sort_order ?? 0),
+  };
+}
+
+function mapHarvestByproduct(row) {
+  return {
+    id: row.id || null,
+    item: row.item || '',
+    originalRate: row.originalRate ?? row.original_rate ?? '',
+    harvest1Qty: toFiniteNumber(row.harvest1Qty ?? row.harvest1_qty),
+    harvest1Sales: toFiniteNumber(row.harvest1Sales ?? row.harvest1_sales),
+    harvest2Qty: toFiniteNumber(row.harvest2Qty ?? row.harvest2_qty),
+    harvest2Sales: toFiniteNumber(row.harvest2Sales ?? row.harvest2_sales),
+    harvest3Qty: toFiniteNumber(row.harvest3Qty ?? row.harvest3_qty),
+    harvest3Sales: toFiniteNumber(row.harvest3Sales ?? row.harvest3_sales),
+    finalRate: row.finalRate ?? row.final_rate ?? '',
+    notes: row.notes || '',
+    sortOrder: Number(row.sortOrder ?? row.sort_order ?? 0),
+  };
+}
+
+function mapHarvestFinancingItem(row) {
+  return {
+    id: row.id || null,
+    item: row.item || '',
+    category: row.category || 'Miscellaneous',
+    quantity: row.quantity ?? '',
+    unitCost: row.unitCost ?? row.unit_cost ?? '',
+    amount: row.amount ?? '',
+    notes: row.notes || '',
+    sortOrder: Number(row.sortOrder ?? row.sort_order ?? 0),
+  };
+}
+
+function getFinancingAmount(row) {
+  const explicitAmount = toNullableFiniteNumber(row.amount);
+  if (explicitAmount !== null) return explicitAmount;
+
+  const quantity = toNullableFiniteNumber(row.quantity);
+  const unitCost = toNullableFiniteNumber(row.unitCost);
+  if (quantity !== null && unitCost !== null) return quantity * unitCost;
+
+  return 0;
+}
+
+function calculateHarvestSummary(report) {
+  const events = (report.harvestEvents || []).map(mapHarvestEvent).sort((a, b) => a.harvestOrder - b.harvestOrder);
+  const chickenRows = (report.chickenSales || []).map(mapHarvestChickenSale);
+  const byproductRows = (report.byproductSales || []).map(mapHarvestByproduct);
+  const financingRows = (report.financingItems || []).map(mapHarvestFinancingItem);
+  const docRate = toFiniteNumber(report.docAddOnRatePerBird ?? report.doc_add_on_rate_per_bird, 3);
+  const truckingRate = toFiniteNumber(report.truckingFeePerBird ?? report.trucking_fee_per_bird, 2.7);
+
+  const perHarvest = [1, 2, 3].map((harvestOrder) => {
+    const event = events.find((item) => Number(item.harvestOrder) === harvestOrder) || { harvestOrder };
+    const birdsKey = `harvest${harvestOrder}Birds`;
+    const kilosKey = `harvest${harvestOrder}Kilos`;
+    const qtyKey = `harvest${harvestOrder}Qty`;
+    const salesKey = `harvest${harvestOrder}Sales`;
+    const birds = chickenRows.reduce((sum, row) => sum + Math.round(toFiniteNumber(row[birdsKey])), 0);
+    const kilos = chickenRows.reduce((sum, row) => sum + toFiniteNumber(row[kilosKey]), 0);
+    const chickenSales = chickenRows.reduce((sum, row) => {
+      const rate = toFiniteNumber(row.finalRate, toFiniteNumber(row.basePricePerKg));
+      return sum + (toFiniteNumber(row[kilosKey]) * rate);
+    }, 0);
+    const byproductSales = byproductRows.reduce((sum, row) => sum + toFiniteNumber(row[salesKey]), 0);
+    const byproductQty = byproductRows.reduce((sum, row) => sum + toFiniteNumber(row[qtyKey]), 0);
+    const grossSales = chickenSales + byproductSales;
+    const docAddOn = birds * docRate;
+    const truckingFee = birds * truckingRate;
+    const permitShipping = toFiniteNumber(event.permitShipping);
+    const tollingFee = toFiniteNumber(event.tollingFee);
+    const totalExpenses = permitShipping + tollingFee + docAddOn + truckingFee;
+    const netSales = grossSales - totalExpenses;
+
+    return {
+      harvestOrder,
+      harvestDate: event.harvestDate || '',
+      birds,
+      kilos: Number(kilos.toFixed(3)),
+      chickenSales: roundMoney(chickenSales),
+      byproductQty: Number(byproductQty.toFixed(3)),
+      byproductSales: roundMoney(byproductSales),
+      grossSales: roundMoney(grossSales),
+      permitShipping: roundMoney(permitShipping),
+      tollingFee: roundMoney(tollingFee),
+      docAddOn: roundMoney(docAddOn),
+      truckingFee: roundMoney(truckingFee),
+      totalExpenses: roundMoney(totalExpenses),
+      netSales: roundMoney(netSales),
+    };
+  });
+
+  const totals = perHarvest.reduce((sum, row) => ({
+    birds: sum.birds + row.birds,
+    kilos: sum.kilos + row.kilos,
+    chickenSales: sum.chickenSales + row.chickenSales,
+    byproductQty: sum.byproductQty + row.byproductQty,
+    byproductSales: sum.byproductSales + row.byproductSales,
+    grossSales: sum.grossSales + row.grossSales,
+    permitShipping: sum.permitShipping + row.permitShipping,
+    tollingFee: sum.tollingFee + row.tollingFee,
+    docAddOn: sum.docAddOn + row.docAddOn,
+    truckingFee: sum.truckingFee + row.truckingFee,
+    totalExpenses: sum.totalExpenses + row.totalExpenses,
+    netSales: sum.netSales + row.netSales,
+  }), {
+    birds: 0,
+    kilos: 0,
+    chickenSales: 0,
+    byproductQty: 0,
+    byproductSales: 0,
+    grossSales: 0,
+    permitShipping: 0,
+    tollingFee: 0,
+    docAddOn: 0,
+    truckingFee: 0,
+    totalExpenses: 0,
+    netSales: 0,
+  });
+  const financingTotal = financingRows.reduce((sum, row) => sum + getFinancingAmount(row), 0);
+  const netProceeds = totals.netSales - financingTotal;
+
+  return {
+    perHarvest,
+    totals: {
+      ...totals,
+      kilos: Number(totals.kilos.toFixed(3)),
+      byproductQty: Number(totals.byproductQty.toFixed(3)),
+      financingTotal: roundMoney(financingTotal),
+      netProceeds: roundMoney(netProceeds),
+      netProceedsPerBird: totals.birds > 0 ? Number((netProceeds / totals.birds).toFixed(4)) : 0,
+    },
+  };
+}
+
+function buildHarvestReportResponse(reportRow, batchRow, detailRows = {}) {
+  const report = {
+    id: reportRow?.id || null,
+    batchId: reportRow?.batch_id || batchRow?.id || null,
+    sourceFilename: reportRow?.source_filename || '',
+    status: reportRow?.status || 'Draft',
+    docAddOnRatePerBird: toFiniteNumber(reportRow?.doc_add_on_rate_per_bird, 3),
+    truckingFeePerBird: toFiniteNumber(reportRow?.trucking_fee_per_bird, 2.7),
+    notes: reportRow?.notes || '',
+    ledgerTransactionIds: reportRow?.ledger_transaction_ids || [],
+    postedAt: reportRow?.posted_at || null,
+    harvestEvents: detailRows.harvestEvents || getDefaultHarvestEvents(batchRow),
+    chickenSales: detailRows.chickenSales?.length ? detailRows.chickenSales : DEFAULT_CHICKEN_SALES_ROWS,
+    byproductSales: detailRows.byproductSales?.length ? detailRows.byproductSales : DEFAULT_BYPRODUCT_ROWS,
+    financingItems: detailRows.financingItems?.length ? detailRows.financingItems : DEFAULT_FINANCING_ROWS,
+  };
+
+  return {
+    ...report,
+    summary: calculateHarvestSummary(report),
+  };
+}
+
+async function getHarvestReport(client, farmId, batchId) {
+  const batch = await client.query(
+    `SELECT
+       id,
+       start_date AS "startDate",
+       target_harvest_date AS "targetHarvestDate",
+       actual_harvest_end_date AS "actualHarvestEndDate"
+     FROM batches
+     WHERE id = $1
+       AND farm_id = $2
+     LIMIT 1`,
+    [batchId, farmId]
+  );
+
+  if (batch.rowCount === 0) return null;
+
+  const report = await client.query(
+    `SELECT *
+     FROM harvest_reports
+     WHERE batch_id = $1
+       AND farm_id = $2
+     LIMIT 1`,
+    [batchId, farmId]
+  );
+
+  if (report.rowCount === 0) {
+    return buildHarvestReportResponse(null, batch.rows[0]);
+  }
+
+  const reportId = report.rows[0].id;
+  const [events, chickenSales, byproductSales, financingItems] = await Promise.all([
+    client.query(
+      `SELECT id, harvest_order AS "harvestOrder", harvest_date AS "harvestDate", permit_shipping AS "permitShipping", tolling_fee AS "tollingFee", remarks
+       FROM harvest_report_events
+       WHERE report_id = $1
+       ORDER BY harvest_order`,
+      [reportId]
+    ),
+    client.query(
+      `SELECT
+         id,
+         sort_order AS "sortOrder",
+         item,
+         base_price_per_kg AS "basePricePerKg",
+         harvest1_birds AS "harvest1Birds",
+         harvest1_kilos AS "harvest1Kilos",
+         harvest2_birds AS "harvest2Birds",
+         harvest2_kilos AS "harvest2Kilos",
+         harvest3_birds AS "harvest3Birds",
+         harvest3_kilos AS "harvest3Kilos",
+         final_rate AS "finalRate",
+         notes
+       FROM harvest_chicken_sales
+       WHERE report_id = $1
+       ORDER BY sort_order, id`,
+      [reportId]
+    ),
+    client.query(
+      `SELECT
+         id,
+         sort_order AS "sortOrder",
+         item,
+         original_rate AS "originalRate",
+         harvest1_qty AS "harvest1Qty",
+         harvest1_sales AS "harvest1Sales",
+         harvest2_qty AS "harvest2Qty",
+         harvest2_sales AS "harvest2Sales",
+         harvest3_qty AS "harvest3Qty",
+         harvest3_sales AS "harvest3Sales",
+         final_rate AS "finalRate",
+         notes
+       FROM harvest_byproduct_sales
+       WHERE report_id = $1
+       ORDER BY sort_order, id`,
+      [reportId]
+    ),
+    client.query(
+      `SELECT
+         id,
+         sort_order AS "sortOrder",
+         item,
+         category,
+         quantity,
+         unit_cost AS "unitCost",
+         amount,
+         notes
+       FROM harvest_financing_items
+       WHERE report_id = $1
+       ORDER BY sort_order, id`,
+      [reportId]
+    ),
+  ]);
+
+  return buildHarvestReportResponse(report.rows[0], batch.rows[0], {
+    harvestEvents: events.rows.map(mapHarvestEvent),
+    chickenSales: chickenSales.rows.map(mapHarvestChickenSale),
+    byproductSales: byproductSales.rows.map(mapHarvestByproduct),
+    financingItems: financingItems.rows.map(mapHarvestFinancingItem),
+  });
+}
+
 async function generateBatchId(client, startDate) {
   const base = startDate.replace(/-/g, '');
   const result = await client.query(
@@ -1269,6 +1660,58 @@ async function insertLinkedLedgerTransaction(client, req, {
       computedAmount,
       paidById,
       paidToId,
+      reference || null,
+      remarks || null,
+      req.user.id,
+    ]
+  );
+
+  await auditLog(client, req, 'create', 'daily_transaction', transactionCode, null, { transactionCode, description, amount: computedAmount }, batchId);
+
+  return transactionCode;
+}
+
+async function insertHarvestLedgerTransaction(client, req, {
+  farmId,
+  batchId,
+  date,
+  type,
+  fundingNature,
+  category,
+  description,
+  quantity = null,
+  unitCost = null,
+  amount,
+  reference,
+  remarks,
+}) {
+  const dbFundingNature = normalizeFundingNatureForDb(fundingNature);
+  const categoryId = await ensureCategory(client, farmId, dbFundingNature, category);
+  const computedAmount = calculateAmount({ quantity, unitCost, amount });
+  const transactionCode = await generateTransactionCode(client, date, 'HRV');
+
+  await client.query(
+    `INSERT INTO daily_transactions
+       (transaction_id, batch_id, date, building_id, building_scope, type, funding_nature,
+        category, category_id, description, quantity, unit_cost, manual_amount, amount,
+        paid_by, paid_to, reference, remarks, created_by_user_id)
+     VALUES
+       ($1, $2, $3, NULL, 'All', $4, $5,
+        $6, $7, $8, $9, $10, $11, $12,
+        NULL, NULL, $13, $14, $15)`,
+    [
+      transactionCode,
+      batchId,
+      date,
+      type,
+      dbFundingNature,
+      category,
+      categoryId,
+      description,
+      quantity === '' || quantity === undefined || quantity === null ? null : quantity,
+      unitCost === '' || unitCost === undefined || unitCost === null ? null : unitCost,
+      hasQuantityAndUnitCost(quantity, unitCost) ? null : computedAmount,
+      computedAmount,
       reference || null,
       remarks || null,
       req.user.id,
@@ -4084,6 +4527,290 @@ app.put('/api/batches/:batchId/loadings', authenticate, requirePrimaryOwner, asy
     res.json({ message: 'Loadings updated' });
   } catch (err) {
     await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/batches/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+  try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
+    const report = await getHarvestReport(pool, farmId, req.params.batchId);
+
+    if (!report) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/batches/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const batch = await client.query(
+      'SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1',
+      [req.params.batchId, farmId]
+    );
+
+    if (batch.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    const before = await client.query(
+      `SELECT *
+       FROM harvest_reports
+       WHERE batch_id = $1
+         AND farm_id = $2
+       FOR UPDATE`,
+      [req.params.batchId, farmId]
+    );
+
+    if (before.rows[0]?.status === 'Posted') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Posted harvest reports cannot be edited.' });
+    }
+
+    const saved = await client.query(
+      `INSERT INTO harvest_reports
+         (farm_id, batch_id, source_filename, doc_add_on_rate_per_bird, trucking_fee_per_bird,
+          notes, created_by_user_id, updated_by_user_id)
+       VALUES
+         ($1, $2, $3, $4, $5, $6, $7, $7)
+       ON CONFLICT (batch_id)
+       DO UPDATE SET
+         source_filename = EXCLUDED.source_filename,
+         doc_add_on_rate_per_bird = EXCLUDED.doc_add_on_rate_per_bird,
+         trucking_fee_per_bird = EXCLUDED.trucking_fee_per_bird,
+         notes = EXCLUDED.notes,
+         updated_by_user_id = EXCLUDED.updated_by_user_id,
+         updated_at = now()
+       RETURNING *`,
+      [
+        farmId,
+        req.params.batchId,
+        req.body.sourceFilename || null,
+        toFiniteNumber(req.body.docAddOnRatePerBird, 3),
+        toFiniteNumber(req.body.truckingFeePerBird, 2.7),
+        req.body.notes || null,
+        req.user.id,
+      ]
+    );
+
+    const reportId = saved.rows[0].id;
+    await client.query('DELETE FROM harvest_report_events WHERE report_id = $1', [reportId]);
+    await client.query('DELETE FROM harvest_chicken_sales WHERE report_id = $1', [reportId]);
+    await client.query('DELETE FROM harvest_byproduct_sales WHERE report_id = $1', [reportId]);
+    await client.query('DELETE FROM harvest_financing_items WHERE report_id = $1', [reportId]);
+
+    const harvestEvents = (req.body.harvestEvents || []).map(mapHarvestEvent);
+    for (let index = 0; index < Math.max(harvestEvents.length, 3); index += 1) {
+      const event = harvestEvents[index] || { harvestOrder: index + 1 };
+      await client.query(
+        `INSERT INTO harvest_report_events
+           (report_id, harvest_order, harvest_date, permit_shipping, tolling_fee, remarks)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          reportId,
+          event.harvestOrder || index + 1,
+          event.harvestDate || null,
+          toFiniteNumber(event.permitShipping),
+          toFiniteNumber(event.tollingFee),
+          event.remarks || null,
+        ]
+      );
+    }
+
+    for (const [index, rawRow] of (req.body.chickenSales || []).entries()) {
+      const row = mapHarvestChickenSale({ ...rawRow, sortOrder: rawRow.sortOrder || index + 1 });
+      if (!row.item.trim()) continue;
+
+      await client.query(
+        `INSERT INTO harvest_chicken_sales
+           (report_id, sort_order, item, base_price_per_kg,
+            harvest1_birds, harvest1_kilos, harvest2_birds, harvest2_kilos,
+            harvest3_birds, harvest3_kilos, final_rate, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          reportId,
+          row.sortOrder || index + 1,
+          row.item.trim(),
+          toNullableFiniteNumber(row.basePricePerKg),
+          Math.round(toFiniteNumber(row.harvest1Birds)),
+          toFiniteNumber(row.harvest1Kilos),
+          Math.round(toFiniteNumber(row.harvest2Birds)),
+          toFiniteNumber(row.harvest2Kilos),
+          Math.round(toFiniteNumber(row.harvest3Birds)),
+          toFiniteNumber(row.harvest3Kilos),
+          toNullableFiniteNumber(row.finalRate),
+          row.notes || null,
+        ]
+      );
+    }
+
+    for (const [index, rawRow] of (req.body.byproductSales || []).entries()) {
+      const row = mapHarvestByproduct({ ...rawRow, sortOrder: rawRow.sortOrder || index + 1 });
+      if (!row.item.trim()) continue;
+
+      await client.query(
+        `INSERT INTO harvest_byproduct_sales
+           (report_id, sort_order, item, original_rate,
+            harvest1_qty, harvest1_sales, harvest2_qty, harvest2_sales,
+            harvest3_qty, harvest3_sales, final_rate, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          reportId,
+          row.sortOrder || index + 1,
+          row.item.trim(),
+          toNullableFiniteNumber(row.originalRate),
+          toFiniteNumber(row.harvest1Qty),
+          toFiniteNumber(row.harvest1Sales),
+          toFiniteNumber(row.harvest2Qty),
+          toFiniteNumber(row.harvest2Sales),
+          toFiniteNumber(row.harvest3Qty),
+          toFiniteNumber(row.harvest3Sales),
+          toNullableFiniteNumber(row.finalRate),
+          row.notes || null,
+        ]
+      );
+    }
+
+    for (const [index, rawRow] of (req.body.financingItems || []).entries()) {
+      const row = mapHarvestFinancingItem({ ...rawRow, sortOrder: rawRow.sortOrder || index + 1 });
+      if (!row.item.trim()) continue;
+
+      await client.query(
+        `INSERT INTO harvest_financing_items
+           (report_id, sort_order, item, category, quantity, unit_cost, amount, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          reportId,
+          row.sortOrder || index + 1,
+          row.item.trim(),
+          row.category || 'Miscellaneous',
+          toNullableFiniteNumber(row.quantity),
+          toNullableFiniteNumber(row.unitCost),
+          toNullableFiniteNumber(row.amount),
+          row.notes || null,
+        ]
+      );
+    }
+
+    const report = await getHarvestReport(client, farmId, req.params.batchId);
+    await auditLog(client, req, before.rowCount ? 'update' : 'create', 'harvest_report', reportId, before.rows[0] || null, report, req.params.batchId);
+    await client.query('COMMIT');
+
+    res.json(report);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const reportLock = await client.query(
+      `SELECT *
+       FROM harvest_reports
+       WHERE batch_id = $1
+         AND farm_id = $2
+       FOR UPDATE`,
+      [req.params.batchId, farmId]
+    );
+
+    if (reportLock.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Save the harvest report before posting it to the ledger.' });
+    }
+
+    if (reportLock.rows[0].status === 'Posted') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This harvest report was already posted to the ledger.' });
+    }
+
+    const report = await getHarvestReport(client, farmId, req.params.batchId);
+    const datedHarvests = report.summary.perHarvest.filter((row) => row.harvestDate);
+
+    if (datedHarvests.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Add at least one harvest date before posting.' });
+    }
+
+    const reference = report.sourceFilename || `Harvest Report ${report.id}`;
+    const ledgerTransactionIds = [];
+
+    for (const row of datedHarvests) {
+      if (row.netSales === 0) continue;
+
+      const transactionId = await insertHarvestLedgerTransaction(client, req, {
+        farmId,
+        batchId: req.params.batchId,
+        date: row.harvestDate,
+        type: 'Income',
+        fundingNature: 'Revenue',
+        category: 'Net Meat Sale',
+        description: `${row.harvestOrder}${row.harvestOrder === 1 ? 'st' : row.harvestOrder === 2 ? 'nd' : 'rd'} Harvest Net Meat Sale`,
+        amount: row.netSales,
+        reference,
+        remarks: `Harvest report ${report.id}. Birds: ${row.birds}; kilos: ${row.kilos}; gross sales: ${row.grossSales}; harvest expenses: ${row.totalExpenses}.`,
+      });
+      ledgerTransactionIds.push(transactionId);
+    }
+
+    const lastHarvestDate = datedHarvests[datedHarvests.length - 1]?.harvestDate;
+    for (const item of report.financingItems) {
+      const amount = roundMoney(getFinancingAmount(item));
+      if (amount <= 0) continue;
+
+      const transactionId = await insertHarvestLedgerTransaction(client, req, {
+        farmId,
+        batchId: req.params.batchId,
+        date: lastHarvestDate,
+        type: 'Expense',
+        fundingNature: 'OPEX',
+        category: item.category || 'Miscellaneous',
+        description: item.item,
+        quantity: item.quantity,
+        unitCost: item.unitCost,
+        amount,
+        reference,
+        remarks: item.notes || `Harvest report ${report.id} financing item.`,
+      });
+      ledgerTransactionIds.push(transactionId);
+    }
+
+    await client.query(
+      `UPDATE harvest_reports
+       SET status = 'Posted',
+           posted_at = now(),
+           posted_by_user_id = $1,
+           ledger_transaction_ids = $2,
+           updated_by_user_id = $1,
+           updated_at = now()
+       WHERE id = $3`,
+      [req.user.id, JSON.stringify(ledgerTransactionIds), report.id]
+    );
+
+    await auditLog(client, req, 'post', 'harvest_report', report.id, reportLock.rows[0], { ledgerTransactionIds }, req.params.batchId);
+    const postedReport = await getHarvestReport(client, farmId, req.params.batchId);
+    await client.query('COMMIT');
+
+    res.json(postedReport);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
