@@ -796,6 +796,52 @@ function buildHarvestReportResponse(reportRow, batchRow, detailRows = {}) {
   };
 }
 
+function buildHarvestProductionSummary(report) {
+  if (!report) return null;
+
+  const summary = report.summary || calculateHarvestSummary(report);
+  const totals = summary.totals || {};
+  const birds = Number(totals.birds || 0);
+  const kilos = Number(totals.kilos || 0);
+  const perHarvest = (summary.perHarvest || []).map((row) => {
+    const harvestBirds = Number(row.birds || 0);
+    const harvestKilos = Number(row.kilos || 0);
+
+    return {
+      harvestOrder: Number(row.harvestOrder || 0),
+      harvestDate: toDateOnly(row.harvestDate) || '',
+      birds: harvestBirds,
+      kilos: harvestKilos,
+      averageWeightKg: harvestBirds > 0 ? Number((harvestKilos / harvestBirds).toFixed(3)) : null,
+    };
+  });
+
+  return {
+    reportId: report.id,
+    batchId: report.batchId,
+    status: report.status || 'Draft',
+    postedAt: report.postedAt || null,
+    hasReport: Boolean(report.id),
+    hasActualSales: birds > 0 || kilos > 0,
+    lastHarvestDate: perHarvest.reduce((latest, row) => {
+      if (!row.harvestDate) return latest;
+      if (!latest || row.harvestDate > latest) return row.harvestDate;
+      return latest;
+    }, ''),
+    totals: {
+      birds,
+      kilos,
+      averageWeightKg: birds > 0 ? Number((kilos / birds).toFixed(3)) : null,
+    },
+    perHarvest,
+  };
+}
+
+async function getHarvestProductionSummary(client, farmId, batchId) {
+  const report = await getHarvestReport(client, farmId, batchId);
+  return buildHarvestProductionSummary(report);
+}
+
 async function getHarvestReport(client, farmId, batchId) {
   const batch = await client.query(
     `SELECT
@@ -1477,6 +1523,7 @@ async function getCurrentBatchSnapshot() {
     logResult,
     inventoryItems,
     movementResult,
+    harvestProductionSummary,
   ] = await Promise.all([
     pool.query(
       `SELECT id, name, loading_share_percentage AS "loadingSharePercentage"
@@ -1580,6 +1627,7 @@ async function getCurrentBatchSnapshot() {
        LIMIT 200`,
       [farmId, batch.id]
     ),
+    getHarvestProductionSummary(pool, farmId, batch.id),
   ]);
 
   return {
@@ -1606,6 +1654,7 @@ async function getCurrentBatchSnapshot() {
     feedItems: inventoryItems.filter((item) => item.category === 'Feed'),
     inventoryItems,
     inventoryMovements: movementResult.rows.map(mapInventoryMovement),
+    harvestProductionSummary,
     stakeholders: [],
   };
 }
@@ -4676,6 +4725,21 @@ app.get('/api/batches/:batchId/loadings', authenticate, async (req, res) => {
       chicksLoaded: Number(row.chicksLoaded || 0),
       loadingSharePct: toNumber(row.loadingSharePct),
     })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/batches/:batchId/harvest-production-summary', authenticate, async (req, res) => {
+  try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
+    const summary = await getHarvestProductionSummary(pool, farmId, req.params.batchId);
+
+    if (!summary) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
+    res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
