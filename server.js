@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { parseQuickEntryWithAi } = require('./lib/quickEntryAiParser');
+const { createFlockOpsReply } = require('./lib/flockOpsAi');
 
 const app = express();
 
@@ -5105,6 +5106,46 @@ app.post('/api/quick-entry', authenticate, requireMinimumRole('OperationManager'
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/flockops-chat', authenticate, async (req, res) => {
+  const { message, context = {} } = req.body || {};
+
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'Message is required.' });
+  }
+
+  const canEnterDaily = hasMinimumRole(req.user.role, 'DataEntry');
+  const canManageOperations = hasMinimumRole(req.user.role, 'OperationManager');
+  const allowedScreens = [
+    'today',
+    'dashboard',
+    'batches',
+    'dailyLog',
+    'paySummary',
+    'inventory',
+    'analytics',
+    'settings',
+    ...(canManageOperations ? ['employees', 'ledger', 'harvest', 'statement'] : []),
+  ];
+
+  try {
+    const result = await createFlockOpsReply({
+      message,
+      context,
+      user: req.user,
+      permissions: {
+        allowedScreens,
+        canEnterDaily,
+        canManageOperations,
+        canViewFinancial: canManageOperations,
+      },
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

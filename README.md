@@ -22,7 +22,7 @@ Optional Render keep-alive:
 - `KEEP_ALIVE_URL=https://octavio-farm-api.onrender.com/health`
 - `KEEP_ALIVE_INTERVAL_MINUTES=14`
 
-Optional quick-entry AI parsing:
+Optional Gemini/OpenAI AI features:
 
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL=gemini-2.5-flash`
@@ -35,6 +35,12 @@ Optional quick-entry AI parsing:
 `POST /api/quick-entry` parses natural-language ledger text into the same fields used by `POST /api/batches/:batchId/transactions`.
 
 The endpoint is authenticated and requires `OperationManager` access. It does not write to the database; the frontend fills the ledger form so the user can review before saving.
+
+## FlockOps Chat
+
+`POST /api/flockops-chat` sends authenticated assistant messages to Gemini and returns a role-aware farm operations reply.
+
+The endpoint uses `GEMINI_API_KEY` and `GEMINI_MODEL`. It filters financial context unless the signed-in user has `OperationManager` access.
 
 ## Regression Check
 
