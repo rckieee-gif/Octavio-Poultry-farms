@@ -5131,6 +5131,13 @@ app.post('/api/flockops-chat', authenticate, async (req, res) => {
   ];
 
   try {
+    console.info('[flockops-chat] request', {
+      userId: req.user.id,
+      role: req.user.role,
+      messageLength: message.length,
+      activeBatchId: context?.activeBatch?.id || null,
+    });
+
     const result = await createFlockOpsReply({
       message,
       context,
@@ -5143,8 +5150,18 @@ app.post('/api/flockops-chat', authenticate, async (req, res) => {
       },
     });
 
+    console.info('[flockops-chat] response', {
+      userId: req.user.id,
+      provider: result.provider,
+      model: result.model,
+    });
+
     res.json(result);
   } catch (err) {
+    console.error('[flockops-chat] error', {
+      userId: req.user.id,
+      message: err.message,
+    });
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
