@@ -40,6 +40,21 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'octavio-farm-api' });
 });
 
+app.get('/api/public/current-batch', async (req, res) => {
+  try {
+    const snapshot = await getCurrentBatchSnapshot();
+
+    if (!snapshot) {
+      return res.status(404).json({ error: 'No current batch found.' });
+    }
+
+    res.json(snapshot);
+  } catch (err) {
+    console.error('Failed to fetch public current batch snapshot:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function normalizeRole(role) {
   if (!role) return role;
   const compactRole = String(role).replace(/[\s_-]/g, '').toLowerCase();
@@ -1422,6 +1437,177 @@ async function getInventoryItems(farmId, category = null) {
   );
 
   return result.rows.map(mapInventoryItem);
+}
+
+async function getCurrentBatchSnapshot() {
+  const farmId = await getDefaultFarmId();
+  const batchResult = await pool.query(
+    `SELECT
+       id,
+       start_date AS "startDate",
+       target_harvest_date AS "targetHarvestDate",
+       actual_harvest_end_date AS "actualHarvestEndDate",
+       status,
+       total_chicks_loaded AS "totalChicksLoaded",
+       planned_flock AS "plannedFlock",
+       target_feed_kg AS "targetFeedKg",
+       notes
+     FROM batches
+     WHERE farm_id = $1
+     ORDER BY
+       CASE
+         WHEN status = 'ONGOING' THEN 0
+         WHEN actual_harvest_end_date IS NULL THEN 1
+         ELSE 2
+       END,
+       start_date DESC
+     LIMIT 1`,
+    [farmId]
+  );
+
+  if (batchResult.rowCount === 0) {
+    return null;
+  }
+
+  const batch = mapBatch(batchResult.rows[0]);
+  const [
+    buildingResult,
+    loadingResult,
+    assignmentResult,
+    logResult,
+    inventoryItems,
+    movementResult,
+  ] = await Promise.all([
+    pool.query(
+      `SELECT id, name, loading_share_percentage AS "loadingSharePercentage"
+       FROM buildings
+       WHERE is_active = true
+         AND name <> 'All'
+       ORDER BY sort_order, name`
+    ),
+    pool.query(
+      `SELECT
+         bbl.id,
+         b.name AS building,
+         bbl.loading_date AS "loadingDate",
+         bbl.chicks_loaded AS "chicksLoaded",
+         bbl.loading_share_pct AS "loadingSharePct",
+         bbl.remarks
+       FROM batch_building_loadings bbl
+       JOIN buildings b ON b.id = bbl.building_id
+       WHERE bbl.batch_id = $1
+       ORDER BY b.sort_order, b.name`,
+      [batch.id]
+    ),
+    pool.query(
+      `SELECT
+         s.id AS "employeeId",
+         COALESCE(s.display_name, s.name) AS "employeeName",
+         COALESCE(s.metadata->>'assignedBuilding', '') AS "assignedBuilding",
+         COALESCE(ebc.handled_birds, 0) AS "handledBirds",
+         COALESCE(bbl.chicks_loaded, 0) AS "buildingChicksLoaded"
+       FROM stakeholders s
+       LEFT JOIN employee_batch_compensations ebc
+         ON ebc.employee_id = s.id
+        AND ebc.batch_id = $2
+       LEFT JOIN buildings b
+         ON b.name = COALESCE(s.metadata->>'assignedBuilding', '')
+       LEFT JOIN batch_building_loadings bbl
+         ON bbl.batch_id = $2
+        AND bbl.building_id = b.id
+       WHERE s.farm_id = $1
+         AND s.type = 'Employee'
+         AND s.is_active = true
+         AND lower(COALESCE(s.display_name, s.name)) NOT IN ('others', 'viewer', 'viewers')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM users u
+           WHERE u.stakeholder_id = s.id
+             AND u.role = 'Viewer'
+         )
+       ORDER BY COALESCE(s.metadata->>'assignedBuilding', ''), COALESCE(s.display_name, s.name)`,
+      [farmId, batch.id]
+    ),
+    pool.query(
+      `SELECT
+         l.id,
+         l.batch_id AS "batchId",
+         l.date,
+         b.name AS building,
+         s.id AS "employeeId",
+         COALESCE(s.display_name, s.name) AS "employeeName",
+         l.handled_birds_snapshot AS "handledBirds",
+         l.feed_item_id AS "feedItemId",
+         ii.name AS "feedItemName",
+         l.feed_consumed AS feed,
+         l.mortality,
+         l.average_weight_g AS "averageWeightGrams",
+         l.remarks
+       FROM daily_logs l
+       LEFT JOIN buildings b ON l.building_id = b.id
+       LEFT JOIN stakeholders s ON s.id = l.employee_id
+       LEFT JOIN inventory_items ii ON ii.id = l.feed_item_id
+       WHERE l.batch_id = $1
+       ORDER BY l.date DESC, l.id DESC`,
+      [batch.id]
+    ),
+    getInventoryItems(farmId),
+    pool.query(
+      `SELECT
+         im.id,
+         im.batch_id AS "batchId",
+         im.item_id AS "itemId",
+         ii.name AS "itemName",
+         ii.category,
+         ii.unit,
+         im.movement_date AS "movementDate",
+         im.movement_type AS "movementType",
+         im.quantity,
+         NULL::numeric AS "unitCost",
+         NULL::numeric AS amount,
+         COALESCE(b.name, 'All') AS building,
+         im.source_type AS "sourceType",
+         im.source_id AS "sourceId",
+         im.linked_transaction_id AS "linkedTransactionId",
+         im.remarks,
+         im.created_at AS "createdAt"
+       FROM inventory_movements im
+       JOIN inventory_items ii ON ii.id = im.item_id
+       LEFT JOIN buildings b ON b.id = im.building_id
+       WHERE im.farm_id = $1
+         AND (im.batch_id = $2 OR im.batch_id IS NULL)
+       ORDER BY im.movement_date DESC, im.id DESC
+       LIMIT 200`,
+      [farmId, batch.id]
+    ),
+  ]);
+
+  return {
+    batch,
+    batches: [batch],
+    buildings: buildingResult.rows.map((row) => ({
+      ...row,
+      loadingSharePercentage: Number(row.loadingSharePercentage || 0),
+    })),
+    loadings: loadingResult.rows.map((row) => ({
+      ...row,
+      loadingDate: toDateOnly(row.loadingDate),
+      chicksLoaded: Number(row.chicksLoaded || 0),
+      loadingSharePct: toNumber(row.loadingSharePct),
+    })),
+    assignments: assignmentResult.rows.map((row) => ({
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      assignedBuilding: row.assignedBuilding || '',
+      handledBirds: Number(row.handledBirds || 0),
+      buildingChicksLoaded: Number(row.buildingChicksLoaded || 0),
+    })),
+    logs: logResult.rows.map(mapDailyLog),
+    feedItems: inventoryItems.filter((item) => item.category === 'Feed'),
+    inventoryItems,
+    inventoryMovements: movementResult.rows.map(mapInventoryMovement),
+    stakeholders: [],
+  };
 }
 
 async function getInventoryItem(client, farmId, itemId) {
