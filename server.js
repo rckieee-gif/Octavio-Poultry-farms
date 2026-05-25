@@ -5092,19 +5092,37 @@ app.post('/api/quick-entry', authenticate, requireMinimumRole('OperationManager'
   }
 
   try {
+    console.info('[quick-entry] request', {
+      userId: req.user.id,
+      role: req.user.role,
+      textLength: text.length,
+    });
+
     const result = await parseQuickEntryWithAi(text, {
       today,
       building,
       paidBy,
     });
 
+    console.info('[quick-entry] parser', {
+      userId: req.user.id,
+      mode: result.parserMode,
+      model: result.parserModel,
+      warning: result.parserWarning || null,
+    });
+
     res.json({
       parsed: result.parsed,
       needsReview: result.parsed.confidence < 0.75 || result.parsed.amount == null,
       parserMode: result.parserMode,
+      parserModel: result.parserModel,
       parserWarning: result.parserWarning,
     });
   } catch (err) {
+    console.error('[quick-entry] error', {
+      userId: req.user.id,
+      message: err.message,
+    });
     res.status(500).json({ error: err.message });
   }
 });

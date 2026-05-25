@@ -25,7 +25,8 @@ Optional Render keep-alive:
 Optional Gemini/OpenAI AI features:
 
 - `GEMINI_API_KEY`
-- `GEMINI_MODEL=gemini-2.5-flash`
+- `GEMINI_MODEL=gemini-2.5-flash-lite`
+- `GEMINI_PARSER_MODEL=gemini-2.5-flash-lite`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL=gpt-4o-mini`
 - `AI_PARSER_DISABLED=false`
@@ -35,6 +36,8 @@ Optional Gemini/OpenAI AI features:
 `POST /api/quick-entry` parses natural-language ledger text into the same fields used by `POST /api/batches/:batchId/transactions`.
 
 The endpoint is authenticated and requires `OperationManager` access. It does not write to the database; the frontend fills the ledger form so the user can review before saving.
+
+The parser uses `GEMINI_PARSER_MODEL` first, then `GEMINI_MODEL`, then `gemini-2.5-flash-lite`.
 
 ## FlockOps Chat
 
