@@ -17,7 +17,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('JWT_SECRET is required in production.');
+}
+
+if (!JWT_SECRET) {
+  console.warn('JWT_SECRET is not set. Using development-only signing secret.');
+}
+
+const JWT_SIGNING_SECRET = JWT_SECRET || 'dev-only-secret';
 
 const roleAliases = {
   Admin: 'AdminOwner',
@@ -164,7 +174,7 @@ async function authenticate(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SIGNING_SECRET);
     const result = await pool.query(
       `SELECT id, farm_id, stakeholder_id, email, username, role, is_active, is_primary_owner
        FROM users
@@ -1183,13 +1193,18 @@ async function upsertLoadings(client, batchId, startDate, loadings = []) {
   }
 }
 
-async function getTransactions(batchId = null) {
+async function getTransactions(batchId = null, farmId = null) {
   const params = [];
-  let where = 'WHERE t.is_void = false';
+  const where = ['t.is_void = false'];
+
+  if (farmId) {
+    params.push(farmId);
+    where.push(`ba.farm_id = $${params.length}`);
+  }
 
   if (batchId) {
     params.push(batchId);
-    where += ` AND t.batch_id = $${params.length}`;
+    where.push(`t.batch_id = $${params.length}`);
   }
 
   const result = await pool.query(
@@ -1214,9 +1229,10 @@ async function getTransactions(batchId = null) {
        feed_item.name AS "feedItemName",
        t.is_void AS "isVoid",
        t.void_reason AS "voidReason"
-     FROM daily_transactions t
-     LEFT JOIN buildings b ON b.id = t.building_id
-     LEFT JOIN categories c ON c.id = t.category_id
+      FROM daily_transactions t
+      JOIN batches ba ON ba.id = t.batch_id
+      LEFT JOIN buildings b ON b.id = t.building_id
+      LEFT JOIN categories c ON c.id = t.category_id
      LEFT JOIN stakeholders paid_by ON paid_by.id = t.paid_by
      LEFT JOIN stakeholders paid_to ON paid_to.id = t.paid_to
      LEFT JOIN inventory_movements feed_im
@@ -1225,8 +1241,8 @@ async function getTransactions(batchId = null) {
          OR (feed_im.source_type IS NULL AND feed_im.linked_transaction_id = t.transaction_id)
        )
      LEFT JOIN inventory_items feed_item ON feed_item.id = feed_im.item_id
-     ${where}
-     ORDER BY t.date DESC, t.transaction_id DESC`,
+      WHERE ${where.join(' AND ')}
+      ORDER BY t.date DESC, t.transaction_id DESC`,
     params
   );
 
@@ -1325,7 +1341,7 @@ async function getAuditLogs({ farmId = null, batchId = null, entityType = null, 
   return result.rows.map(mapAuditLog);
 }
 
-async function getReceivablesSummary(batchId) {
+async function getReceivablesSummary(batchId, farmId) {
   const result = await pool.query(
     `WITH scoped AS (
        SELECT
@@ -1343,11 +1359,13 @@ async function getReceivablesSummary(batchId) {
            THEN true
            ELSE false
          END AS is_reimbursement
-       FROM daily_transactions dt
-       LEFT JOIN categories c ON c.id = dt.category_id
-       WHERE dt.batch_id = $1
-         AND dt.is_void = false
-         AND dt.funding_nature = 'Receivable'
+        FROM daily_transactions dt
+        JOIN batches b ON b.id = dt.batch_id
+        LEFT JOIN categories c ON c.id = dt.category_id
+        WHERE dt.batch_id = $1
+          AND b.farm_id = $2
+          AND dt.is_void = false
+          AND dt.funding_nature = 'Receivable'
      )
      SELECT
        s.id AS "stakeholderId",
@@ -1357,11 +1375,12 @@ async function getReceivablesSummary(batchId) {
        COALESCE(SUM(CASE WHEN scoped.is_reimbursement THEN -scoped.amount ELSE scoped.amount END), 0) AS "outstandingAdvance",
        COUNT(scoped.transaction_id)::integer AS "transactionCount",
        MAX(scoped.date) AS "lastTransactionDate"
-     FROM scoped
-     JOIN stakeholders s ON s.id = scoped.counterparty_id
-     GROUP BY s.id, s.name
-     ORDER BY "outstandingAdvance" DESC, s.name`,
-    [batchId]
+      FROM scoped
+      JOIN stakeholders s ON s.id = scoped.counterparty_id
+      WHERE s.farm_id = $2
+      GROUP BY s.id, s.name
+      ORDER BY "outstandingAdvance" DESC, s.name`,
+    [batchId, farmId]
   );
 
   return result.rows.map(row => ({
@@ -1373,7 +1392,7 @@ async function getReceivablesSummary(batchId) {
   }));
 }
 
-async function getPayablesSummary(batchId) {
+async function getPayablesSummary(batchId, farmId) {
   const result = await pool.query(
     `WITH scoped AS (
        SELECT
@@ -1397,10 +1416,12 @@ async function getPayablesSummary(batchId) {
            WHEN dt.funding_nature = 'CAPEX-Recoverable' THEN 'CAPEX'
            ELSE dt.funding_nature
          END AS payable_bucket
-       FROM daily_transactions dt
-       LEFT JOIN categories c ON c.id = dt.category_id
-       WHERE dt.batch_id = $1
-         AND dt.is_void = false
+        FROM daily_transactions dt
+        JOIN batches b ON b.id = dt.batch_id
+        LEFT JOIN categories c ON c.id = dt.category_id
+        WHERE dt.batch_id = $1
+          AND b.farm_id = $2
+          AND dt.is_void = false
          AND (
            dt.funding_nature = 'Payable'
            OR (
@@ -1421,11 +1442,12 @@ async function getPayablesSummary(batchId) {
        COALESCE(SUM(CASE WHEN scoped.is_payment THEN -scoped.amount ELSE scoped.amount END), 0) AS "outstandingPayable",
        COUNT(scoped.transaction_id)::integer AS "transactionCount",
        MAX(scoped.date) AS "lastTransactionDate"
-     FROM scoped
-     JOIN stakeholders s ON s.id = scoped.counterparty_id
-     GROUP BY s.id, s.name
-     ORDER BY "outstandingPayable" DESC, s.name`,
-    [batchId]
+      FROM scoped
+      JOIN stakeholders s ON s.id = scoped.counterparty_id
+      WHERE s.farm_id = $2
+      GROUP BY s.id, s.name
+      ORDER BY "outstandingPayable" DESC, s.name`,
+    [batchId, farmId]
   );
 
   return result.rows.map(row => ({
@@ -2338,7 +2360,7 @@ app.post('/api/auth/login', async (req, res) => {
     const normalizedRole = normalizeRole(user.role);
     const token = jwt.sign(
       { userId: user.id, role: normalizedRole, email: user.email, username: user.username },
-      JWT_SECRET,
+      JWT_SIGNING_SECRET,
       { expiresIn: '12h' }
     );
 
@@ -4463,6 +4485,7 @@ app.get('/api/batches/:batchId/employee-assignments', authenticate, async (req, 
 
 app.get('/api/batches', authenticate, async (req, res) => {
   try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(`
       SELECT
         id,
@@ -4475,8 +4498,9 @@ app.get('/api/batches', authenticate, async (req, res) => {
         target_feed_kg AS "targetFeedKg",
         notes
       FROM batches
+      WHERE farm_id = $1
       ORDER BY start_date DESC
-    `);
+    `, [farmId]);
 
     res.json(result.rows.map(mapBatch));
   } catch (err) {
@@ -4487,6 +4511,7 @@ app.get('/api/batches', authenticate, async (req, res) => {
 
 app.get('/api/batches/active', authenticate, async (req, res) => {
   try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(`
       SELECT
         id,
@@ -4500,9 +4525,10 @@ app.get('/api/batches/active', authenticate, async (req, res) => {
         notes
       FROM batches
       WHERE status = 'ONGOING'
+        AND farm_id = $1
       ORDER BY start_date DESC
       LIMIT 1
-    `);
+    `, [farmId]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'No active batch found' });
@@ -5070,7 +5096,7 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
 
 app.get('/api/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
-    res.json(await getTransactions(req.query.batchId || null));
+    res.json(await getTransactions(req.query.batchId || null, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5078,7 +5104,7 @@ app.get('/api/transactions', authenticate, requireMinimumRole('OperationManager'
 
 app.get('/api/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
-    res.json(await getTransactions(req.params.batchId));
+    res.json(await getTransactions(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5233,12 +5259,15 @@ app.get('/api/transactions/:id/audit-logs', authenticate, requirePrimaryOwner, a
 
 app.get('/api/batches/:batchId/opex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
-      `SELECT category, total_amount AS "totalAmount"
-       FROM vw_batch_opex_summary
-       WHERE batch_id = $1
+      `SELECT v.category, v.total_amount AS "totalAmount"
+       FROM vw_batch_opex_summary v
+       JOIN batches b ON b.id = v.batch_id
+       WHERE v.batch_id = $1
+         AND b.farm_id = $2
        ORDER BY category`,
-      [req.params.batchId]
+      [req.params.batchId, farmId]
     );
     res.json(result.rows.map(row => ({ ...row, totalAmount: Number(row.totalAmount || 0) })));
   } catch (err) {
@@ -5248,12 +5277,15 @@ app.get('/api/batches/:batchId/opex-summary', authenticate, requireMinimumRole('
 
 app.get('/api/batches/:batchId/capex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
+    const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
-      `SELECT category, total_amount AS "totalAmount"
-       FROM vw_batch_capex_summary
-       WHERE batch_id = $1
+      `SELECT v.category, v.total_amount AS "totalAmount"
+       FROM vw_batch_capex_summary v
+       JOIN batches b ON b.id = v.batch_id
+       WHERE v.batch_id = $1
+         AND b.farm_id = $2
        ORDER BY category`,
-      [req.params.batchId]
+      [req.params.batchId, farmId]
     );
     res.json(result.rows.map(row => ({ ...row, totalAmount: Number(row.totalAmount || 0) })));
   } catch (err) {
@@ -5263,7 +5295,7 @@ app.get('/api/batches/:batchId/capex-summary', authenticate, requireMinimumRole(
 
 app.get('/api/batches/:batchId/receivables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
-    res.json(await getReceivablesSummary(req.params.batchId));
+    res.json(await getReceivablesSummary(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5271,7 +5303,7 @@ app.get('/api/batches/:batchId/receivables-summary', authenticate, requireMinimu
 
 app.get('/api/batches/:batchId/payables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
   try {
-    res.json(await getPayablesSummary(req.params.batchId));
+    res.json(await getPayablesSummary(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5537,8 +5569,9 @@ app.post('/api/inventory/movements', authenticate, requireMinimumRole('Operation
 
 app.get('/api/logs', authenticate, async (req, res) => {
   try {
-    const params = [];
-    const where = [];
+    const farmId = req.user.farm_id || await getDefaultFarmId();
+    const params = [farmId];
+    const where = ['ba.farm_id = $1'];
 
     if (req.query.batchId) {
       params.push(req.query.batchId);
@@ -5561,10 +5594,11 @@ app.get('/api/logs', authenticate, async (req, res) => {
          l.average_weight_g AS "averageWeightGrams",
          l.remarks
        FROM daily_logs l
+       JOIN batches ba ON ba.id = l.batch_id
        LEFT JOIN buildings b ON l.building_id = b.id
        LEFT JOIN stakeholders s ON s.id = l.employee_id
        LEFT JOIN inventory_items ii ON ii.id = l.feed_item_id
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       WHERE ${where.join(' AND ')}
        ORDER BY l.date DESC, l.id DESC`,
       params
     );
