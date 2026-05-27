@@ -848,6 +848,22 @@ function buildHarvestProductionSummary(report) {
   };
 }
 
+function getLatestHarvestDate(harvestRows) {
+  return harvestRows.reduce((latest, row) => {
+    if (!row.harvestDate) return latest;
+    if (!latest || row.harvestDate > latest) return row.harvestDate;
+    return latest;
+  }, '');
+}
+
+function getOrdinalLabel(value) {
+  const numberValue = Number(value || 0);
+  if (numberValue === 1) return '1st';
+  if (numberValue === 2) return '2nd';
+  if (numberValue === 3) return '3rd';
+  return `${numberValue}th`;
+}
+
 async function getHarvestProductionSummary(client, farmId, batchId) {
   const report = await getHarvestReport(client, farmId, batchId);
   return buildHarvestProductionSummary(report);
@@ -5020,6 +5036,7 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
 
     const report = await getHarvestReport(client, farmId, req.params.batchId);
     const datedHarvests = report.summary.perHarvest.filter((row) => row.harvestDate);
+    const latestHarvestDate = getLatestHarvestDate(datedHarvests);
 
     if (datedHarvests.length === 0) {
       await client.query('ROLLBACK');
@@ -5039,7 +5056,7 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
         type: 'Income',
         fundingNature: 'Revenue',
         category: 'Net Meat Sale',
-        description: `${row.harvestOrder}${row.harvestOrder === 1 ? 'st' : row.harvestOrder === 2 ? 'nd' : 'rd'} Harvest Net Meat Sale`,
+        description: `${getOrdinalLabel(row.harvestOrder)} Harvest net sale after harvest expenses`,
         amount: row.netSales,
         reference,
         remarks: `Harvest report ${report.id}. Birds: ${row.birds}; kilos: ${row.kilos}; gross sales: ${row.grossSales}; harvest expenses: ${row.totalExpenses}.`,
@@ -5047,7 +5064,6 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
       ledgerTransactionIds.push(transactionId);
     }
 
-    const lastHarvestDate = datedHarvests[datedHarvests.length - 1]?.harvestDate;
     for (const item of report.financingItems) {
       const amount = roundMoney(getFinancingAmount(item));
       if (amount <= 0) continue;
@@ -5055,7 +5071,7 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
       const transactionId = await insertHarvestLedgerTransaction(client, req, {
         farmId,
         batchId: req.params.batchId,
-        date: lastHarvestDate,
+        date: latestHarvestDate,
         type: 'Expense',
         fundingNature: 'OPEX',
         category: item.category || 'Miscellaneous',
@@ -5068,6 +5084,16 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
       });
       ledgerTransactionIds.push(transactionId);
     }
+
+    await client.query(
+      `UPDATE batches
+       SET status = 'HARVESTED',
+           actual_harvest_end_date = $1,
+           updated_at = now()
+       WHERE id = $2
+         AND farm_id = $3`,
+      [latestHarvestDate, req.params.batchId, farmId]
+    );
 
     await client.query(
       `UPDATE harvest_reports
