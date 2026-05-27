@@ -1,8 +1,25 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const dotenv = require('dotenv');
 
 dotenv.config({ path: path.resolve(__dirname, '.env'), quiet: true });
+
+async function checkApiHealth(apiBase) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
+    const response = await fetch(`${apiBase}/health`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (response.ok) {
+      const data = await response.json();
+      return data.service === 'octavio-farm-api';
+    }
+  } catch {
+    // Ignore, API is not reachable/healthy
+  }
+  return false;
+}
 
 const config = {
   apiBase: trimTrailingSlash(
@@ -378,18 +395,48 @@ async function main() {
   };
   let runError = null;
   let cleanupError = null;
+  let serverProcess = null;
 
   try {
+    const isHealthy = await checkApiHealth(config.apiBase);
+    if (!isHealthy) {
+      console.log(`API at ${config.apiBase} is not running. Starting API server...`);
+      serverProcess = spawn('node', [path.resolve(__dirname, 'server.js')], {
+        cwd: __dirname,
+        stdio: 'ignore',
+        env: { ...process.env },
+      });
+
+      let healthy = false;
+      for (let i = 0; i < 50; i++) {
+        healthy = await checkApiHealth(config.apiBase);
+        if (healthy) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      if (!healthy) {
+        throw new Error(`Failed to start API server at ${config.apiBase} within 5 seconds.`);
+      }
+      console.log('API server started and healthy.');
+    } else {
+      console.log(`API at ${config.apiBase} is already running.`);
+    }
+
     await runRegression(context);
   } catch (error) {
     runError = error;
-  }
+  } finally {
+    if (context.token && context.batchId && context.createdTransactionIds.length > 0) {
+      try {
+        await cleanupTransactions(context.token, context.batchId, context.createdTransactionIds);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
 
-  if (context.token && context.batchId && context.createdTransactionIds.length > 0) {
-    try {
-      await cleanupTransactions(context.token, context.batchId, context.createdTransactionIds);
-    } catch (error) {
-      cleanupError = error;
+    if (serverProcess) {
+      console.log('Stopping spawned API server...');
+      serverProcess.kill();
     }
   }
 
