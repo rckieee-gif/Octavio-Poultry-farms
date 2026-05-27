@@ -339,7 +339,20 @@ function isEmployeePaySheetName(name) {
   return normalized && !['others', 'viewer', 'viewers'].includes(normalized);
 }
 
-function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLogRows) {
+function calculateMortalityBuffer(buildingChicksLoaded, employeeHandledBirds, totalBuildingHandledBirds) {
+  const loaded = Number(buildingChicksLoaded || 0);
+  const handled = Number(employeeHandledBirds || 0);
+  const totalHandled = Number(totalBuildingHandledBirds || 0);
+  if (!loaded || !handled || !totalHandled || loaded <= totalHandled) return 0;
+  const employeeShare = handled / totalHandled;
+  return Math.max(0, Math.floor(loaded * employeeShare) - handled);
+}
+
+function applyMortalityBuffer(mortality, buffer) {
+  return Math.max(0, Number(mortality || 0) - Number(buffer || 0));
+}
+
+function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLogRows, batchLoadingRows = []) {
   const parent = new Map();
   const mortalityByEmployee = new Map();
 
@@ -354,6 +367,21 @@ function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLog
     .filter((employee) => isEmployeePaySheetName(employee.employeeName));
 
   rows.forEach((row) => parent.set(row.employeeId, row.employeeId));
+
+  // Build loading map and per-building handled totals for mortality buffer
+  const loadingMap = new Map();
+  batchLoadingRows.forEach((row) => {
+    const key = String(row.building || '').toUpperCase();
+    if (key) loadingMap.set(key, Number(row.chicksLoaded || row.chicks_loaded || 0));
+  });
+
+  const buildingHandledTotals = new Map();
+  rows.forEach((row) => {
+    const bldg = String(row.assignedBuilding || '').toUpperCase();
+    if (bldg) {
+      buildingHandledTotals.set(bldg, (buildingHandledTotals.get(bldg) || 0) + Number(row.handledBirds || 0));
+    }
+  });
 
   const find = (id) => {
     const current = parent.get(id) ?? id;
@@ -380,7 +408,14 @@ function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLog
     const key = find(row.employeeId);
     const mortality = mortalityByEmployee.get(row.employeeId) || 0;
     const grossHandledBirds = Number(row.handledBirds || 0);
-    const netHandledBirds = Math.max(grossHandledBirds - mortality, 0);
+    const bldg = String(row.assignedBuilding || '').toUpperCase();
+    const buffer = calculateMortalityBuffer(
+      loadingMap.get(bldg),
+      grossHandledBirds,
+      buildingHandledTotals.get(bldg)
+    );
+    const effectiveMortality = applyMortalityBuffer(mortality, buffer);
+    const netHandledBirds = Math.max(grossHandledBirds - effectiveMortality, 0);
     const group = groups.get(key) || { netHandledBirds: 0, members: [] };
 
     group.netHandledBirds += netHandledBirds;
@@ -427,7 +462,14 @@ function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLog
     const group = groups.get(find(row.employeeId));
     const mortality = mortalityByEmployee.get(row.employeeId) || 0;
     const grossHandledBirds = Number(row.handledBirds || 0);
-    const netHandledBirds = Math.max(grossHandledBirds - mortality, 0);
+    const empBldg = String(row.assignedBuilding || '').toUpperCase();
+    const mortalityBuffer = calculateMortalityBuffer(
+      loadingMap.get(empBldg),
+      grossHandledBirds,
+      buildingHandledTotals.get(empBldg)
+    );
+    const effectiveMortality = applyMortalityBuffer(mortality, mortalityBuffer);
+    const netHandledBirds = Math.max(grossHandledBirds - effectiveMortality, 0);
     const memberCount = group?.members.length || 1;
     const poolBirds = memberCount > 1 ? group.netHandledBirds : netHandledBirds;
     const payableBirds = memberCount > 1 ? poolBirds / memberCount : netHandledBirds;
@@ -440,6 +482,8 @@ function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLog
       ...row,
       grossHandledBirds,
       mortality,
+      mortalityBuffer,
+      effectiveMortality,
       netHandledBirds,
       poolBirds,
       payableBirds,
@@ -4300,7 +4344,7 @@ app.get('/api/batches/:batchId/employee-pay-summary', authenticate, async (req, 
       return res.status(404).json({ error: 'Batch not found' });
     }
 
-    const [compensations, transactions, dailyLogs] = await Promise.all([
+    const [compensations, transactions, dailyLogs, batchLoadings] = await Promise.all([
       pool.query(
         `SELECT
            s.id AS "employeeId",
@@ -4355,9 +4399,18 @@ app.get('/api/batches/:batchId/employee-pay-summary', authenticate, async (req, 
          GROUP BY employee_id`,
         [req.params.batchId]
       ),
+      pool.query(
+        `SELECT
+           b.name AS building,
+           bbl.chicks_loaded AS "chicksLoaded"
+         FROM batch_building_loadings bbl
+         JOIN buildings b ON b.id = bbl.building_id
+         WHERE bbl.batch_id = $1`,
+        [req.params.batchId]
+      ),
     ]);
 
-    const rows = buildEmployeePaySummaryRows(compensations.rows, transactions.rows, dailyLogs.rows);
+    const rows = buildEmployeePaySummaryRows(compensations.rows, transactions.rows, dailyLogs.rows, batchLoadings.rows);
     const totals = rows.reduce((sum, row) => ({
       grossHandledBirds: sum.grossHandledBirds + row.grossHandledBirds,
       mortality: sum.mortality + row.mortality,
