@@ -1781,6 +1781,52 @@ async function insertInventoryMovement(client, req, {
   return result.rows[0].id;
 }
 
+async function zeroOutFeedInventory(client, req, farmId, batchId, date) {
+  const result = await client.query(
+    `SELECT
+       ii.id,
+       ii.name,
+       COALESCE(SUM(
+         CASE
+           WHEN im.movement_type = 'Stock In' THEN im.quantity
+           WHEN im.movement_type = 'Stock Out' THEN -im.quantity
+           WHEN im.movement_type = 'Adjustment' THEN im.quantity
+           ELSE 0
+         END
+       ), 0) AS "currentStock"
+     FROM inventory_items ii
+     LEFT JOIN inventory_movements im ON im.item_id = ii.id
+     WHERE ii.farm_id = $1 AND ii.is_active = true AND ii.category = 'Feed'
+     GROUP BY ii.id`,
+    [farmId]
+  );
+
+  for (const row of result.rows) {
+    const currentStock = Number(row.currentStock || 0);
+    if (currentStock > 0) {
+      await insertInventoryMovement(client, req, {
+        farmId,
+        batchId,
+        itemId: row.id,
+        movementDate: date,
+        movementType: 'Stock Out',
+        quantity: currentStock,
+        remarks: `Returned leftover ${row.name} at harvest (automated)`,
+      });
+    } else if (currentStock < 0) {
+      await insertInventoryMovement(client, req, {
+        farmId,
+        batchId,
+        itemId: row.id,
+        movementDate: date,
+        movementType: 'Adjustment',
+        quantity: Math.abs(currentStock),
+        remarks: `Adjusted inventory discrepancy for ${row.name} at harvest (automated)`,
+      });
+    }
+  }
+}
+
 async function syncBatchChickInventory(client, req, {
   farmId,
   batchId,
@@ -4713,6 +4759,14 @@ app.patch('/api/batches/:id', authenticate, requirePrimaryOwner, async (req, res
     });
 
     await auditLog(client, req, 'update', 'batch', id, before.rows[0], result.rows[0], id);
+
+    const oldStatus = before.rows[0]?.status;
+    const newStatus = status || 'ONGOING';
+    if (oldStatus !== 'HARVESTED' && oldStatus !== 'CLOSED' && (newStatus === 'HARVESTED' || newStatus === 'CLOSED')) {
+      const harvestDate = req.body.actualHarvestEndDate || targetHarvestDate || startDate || toDateOnly(new Date());
+      await zeroOutFeedInventory(client, req, farmId, id, harvestDate);
+    }
+
     await client.query('COMMIT');
 
     res.json(mapBatch(result.rows[0]));
@@ -5094,6 +5148,8 @@ app.post('/api/batches/:batchId/harvest-report/post-ledger', authenticate, requi
          AND farm_id = $3`,
       [latestHarvestDate, req.params.batchId, farmId]
     );
+
+    await zeroOutFeedInventory(client, req, farmId, req.params.batchId, latestHarvestDate);
 
     await client.query(
       `UPDATE harvest_reports
