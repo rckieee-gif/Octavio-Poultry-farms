@@ -11,6 +11,7 @@ const employeesRouter = require('./routes/employees');
 const logsRouter = require('./routes/logs');
 const aiRouter = require('./routes/ai');
 const settingsRouter = require('./routes/settings');
+const masterDataRouter = require('./routes/masterData');
 
 const app = express();
 
@@ -19,6 +20,10 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(origin => origin.trim())
   .filter(Boolean);
+
+if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0) {
+  throw new Error('CORS_ORIGINS must be set in production.');
+}
 
 app.use(cors({
   origin(origin, callback) {
@@ -55,6 +60,7 @@ app.use('/api/inventory', inventoryRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api', masterDataRouter);
 
 // Dual mount transactions / employees since they have nested /api/batches/... paths
 app.use('/api/transactions', transactionsRouter);
@@ -63,7 +69,7 @@ app.use('/api', employeesRouter);
 app.use('/api', aiRouter);
 
 // 6. Public Batch Snapshot Route
-app.get('/api/public/current-batch', async (req, res) => {
+app.get('/api/public/current-batch', async (req, res, next) => {
   try {
     const snapshot = await getCurrentBatchSnapshot();
     if (!snapshot) {
@@ -71,8 +77,7 @@ app.get('/api/public/current-batch', async (req, res) => {
     }
     res.json(snapshot);
   } catch (err) {
-    console.error('Failed to fetch public current batch snapshot:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
