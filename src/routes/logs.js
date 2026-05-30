@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, getDefaultFarmId, getBuilding } = require('../db');
 const { authenticate, requirePrimaryOwner } = require('../middleware/auth');
 const { requireMinimumRole } = require('../middleware/roles');
+const { validate, dailyLogSchema } = require('../middleware/validate');
 const { getInventoryItem, getInventoryItemByName, insertInventoryMovement } = require('../services/inventory.service');
 const { auditLog } = require('../services/transactions.service');
 const { toDateOnly } = require('../utils/validation');
@@ -27,7 +28,7 @@ function mapDailyLog(row) {
   };
 }
 
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const params = [farmId];
@@ -65,11 +66,11 @@ router.get('/', authenticate, async (req, res) => {
 
     res.json(result.rows.map(mapDailyLog));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/', authenticate, requireMinimumRole('DataEntry'), async (req, res) => {
+router.post('/', authenticate, requireMinimumRole('DataEntry'), validate(dailyLogSchema), async (req, res, next) => {
   const {
     batchId,
     date,
@@ -236,13 +237,13 @@ router.post('/', authenticate, requireMinimumRole('DataEntry'), async (req, res)
     res.status(201).json(mapDailyLog(dailyLog));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.patch('/:id', authenticate, requirePrimaryOwner, validate(dailyLogSchema), async (req, res, next) => {
   const {
     batchId,
     date,
@@ -444,13 +445,13 @@ router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
     res.json(mapDailyLog(dailyLog));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -486,7 +487,7 @@ router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
     res.json({ message: 'Log deleted' });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }

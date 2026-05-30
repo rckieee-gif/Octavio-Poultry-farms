@@ -87,7 +87,13 @@ app.use((err, req, res, next) => {
     return res.status(403).json({ error: err.message });
   }
   console.error('Unhandled server error:', err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
+
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : err.message || 'Internal server error',
+  });
 });
 
 module.exports = app;

@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, getDefaultFarmId, getBuilding } = require('../db');
 const { authenticate, requirePrimaryOwner } = require('../middleware/auth');
 const { requireMinimumRole } = require('../middleware/roles');
+const { validate, batchSchema, batchLoadingsSchema, harvestReportSchema } = require('../middleware/validate');
 const {
   insertHarvestLedgerTransaction,
   auditLog,
@@ -423,7 +424,7 @@ async function generateBatchId(client, startDate) {
 }
 
 // --- Routes ---
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(`
@@ -445,11 +446,11 @@ router.get('/', authenticate, async (req, res) => {
     res.json(result.rows.map(mapBatch));
   } catch (err) {
     console.error('Failed to fetch batches:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/active', authenticate, async (req, res) => {
+router.get('/active', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(`
@@ -477,11 +478,11 @@ router.get('/active', authenticate, async (req, res) => {
     res.json(mapBatch(result.rows[0]));
   } catch (err) {
     console.error('Failed to fetch active batch:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(batchSchema), async (req, res, next) => {
   const {
     startDate,
     targetHarvestDate,
@@ -556,13 +557,13 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), async (re
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to create batch:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), async (req, res, next) => {
   const { id } = req.params;
   const {
     startDate,
@@ -651,13 +652,13 @@ router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to update batch:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const { id } = req.params;
   const client = await pool.connect();
 
@@ -671,13 +672,13 @@ router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to delete batch:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.get('/:batchId/loadings', authenticate, async (req, res) => {
+router.get('/:batchId/loadings', authenticate, async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT
@@ -701,11 +702,11 @@ router.get('/:batchId/loadings', authenticate, async (req, res) => {
       loadingSharePct: toNumber(row.loadingSharePct),
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/:batchId/harvest-production-summary', authenticate, async (req, res) => {
+router.get('/:batchId/harvest-production-summary', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const summary = await getHarvestProductionSummary(pool, farmId, req.params.batchId);
@@ -716,11 +717,11 @@ router.get('/:batchId/harvest-production-summary', authenticate, async (req, res
 
     res.json(summary);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, async (req, res) => {
+router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(batchLoadingsSchema), async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -752,13 +753,13 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, async (req, 
     res.json({ message: 'Loadings updated' });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.get('/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const report = await getHarvestReport(pool, farmId, req.params.batchId);
@@ -769,11 +770,11 @@ router.get('/:batchId/harvest-report', authenticate, requireMinimumRole('Operati
 
     res.json(report);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.put('/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.put('/:batchId/harvest-report', authenticate, requireMinimumRole('OperationManager'), validate(harvestReportSchema), async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -935,13 +936,13 @@ router.put('/:batchId/harvest-report', authenticate, requireMinimumRole('Operati
     res.json(report);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.post('/:batchId/harvest-report/post-ledger', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/:batchId/harvest-report/post-ledger', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -1048,7 +1049,7 @@ router.post('/:batchId/harvest-report/post-ledger', authenticate, requireMinimum
     res.json(postedReport);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }

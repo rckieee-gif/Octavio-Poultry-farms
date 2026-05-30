@@ -76,7 +76,7 @@ async function auditLog(client, req, action, entityType, entityId, beforeData, a
   );
 }
 
-async function voidTransaction(req, res, transactionId, batchId = null) {
+async function voidTransaction(req, res, next, transactionId, batchId = null) {
   const reason = (req.body?.reason || 'Voided from ledger').trim();
 
   if (!reason) {
@@ -155,7 +155,7 @@ async function voidTransaction(req, res, transactionId, batchId = null) {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to void transaction:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
@@ -632,7 +632,7 @@ async function syncLedgerFeedInventory(client, req, {
   });
 }
 
-async function createTransaction(req, res, batchIdFromRoute = null) {
+async function createTransaction(req, res, next, batchIdFromRoute = null) {
   const {
     date,
     building = 'All',
@@ -750,13 +750,13 @@ async function createTransaction(req, res, batchIdFromRoute = null) {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to create transaction:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 }
 
-async function updateTransaction(req, res, batchId, transactionId) {
+async function updateTransaction(req, res, next, batchId, transactionId) {
   const {
     date,
     building = 'All',
@@ -886,7 +886,7 @@ async function updateTransaction(req, res, batchId, transactionId) {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Failed to update transaction:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }

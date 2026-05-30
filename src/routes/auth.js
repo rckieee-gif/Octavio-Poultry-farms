@@ -7,7 +7,7 @@ const { normalizeRole } = require('../middleware/roles');
 
 const router = express.Router();
 
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
   const login = (req.body.login || req.body.email || req.body.username || '').trim();
   const { password } = req.body;
 
@@ -57,7 +57,7 @@ router.post('/login', async (req, res) => {
     });
   } catch (err) {
     console.error('SERVER ERROR DURING LOGIN:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
@@ -73,7 +73,7 @@ router.get('/me', authenticate, (req, res) => {
   });
 });
 
-router.post('/change-password', authenticate, async (req, res) => {
+router.post('/change-password', authenticate, async (req, res, next) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
@@ -108,7 +108,7 @@ router.post('/change-password', authenticate, async (req, res) => {
     res.json({ message: 'Password changed successfully.' });
   } catch (err) {
     console.error('Failed to change password:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 

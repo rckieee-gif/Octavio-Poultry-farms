@@ -5,7 +5,7 @@ const { createFlockOpsReply } = require('../../lib/flockOpsAi');
 
 const router = express.Router();
 
-router.post('/flockops-chat', authenticate, async (req, res) => {
+router.post('/flockops-chat', authenticate, async (req, res, next) => {
   const { message, chatHistory } = req.body;
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -22,7 +22,9 @@ router.post('/flockops-chat', authenticate, async (req, res) => {
     res.json({ reply });
   } catch (err) {
     console.error('Failed to run flockops ai chat:', err);
-    res.status(500).json({ error: 'AI processing failed' });
+    const customError = new Error('AI processing failed');
+    customError.status = 500;
+    next(customError);
   }
 });
 

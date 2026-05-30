@@ -7,7 +7,7 @@ const { auditLog, getAuditLogs } = require('../services/transactions.service');
 
 const router = express.Router();
 
-router.get('/users', authenticate, requirePrimaryOwner, async (req, res) => {
+router.get('/users', authenticate, requirePrimaryOwner, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -38,11 +38,11 @@ router.get('/users', authenticate, requirePrimaryOwner, async (req, res) => {
       isPrimaryOwner: Boolean(row.isPrimaryOwner),
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/audit-logs', authenticate, requirePrimaryOwner, async (req, res) => {
+router.get('/audit-logs', authenticate, requirePrimaryOwner, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     res.json(await getAuditLogs({
@@ -53,11 +53,11 @@ router.get('/audit-logs', authenticate, requirePrimaryOwner, async (req, res) =>
       limit: req.query.limit || 150,
     }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/users', authenticate, requirePrimaryOwner, async (req, res) => {
+router.post('/users', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const {
     email,
     username,
@@ -120,13 +120,13 @@ router.post('/users', authenticate, requirePrimaryOwner, async (req, res) => {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email or username already exists.' });
     }
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.patch('/users/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.patch('/users/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const {
     email,
     username,
@@ -214,13 +214,13 @@ router.patch('/users/:id', authenticate, requirePrimaryOwner, async (req, res) =
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Email or username already exists.' });
     }
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.delete('/users/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.delete('/users/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const userId = Number(req.params.id);
 
   if (userId === req.user.id) {
@@ -257,7 +257,7 @@ router.delete('/users/:id', authenticate, requirePrimaryOwner, async (req, res) 
     res.json({ message: 'User account disabled.' });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }

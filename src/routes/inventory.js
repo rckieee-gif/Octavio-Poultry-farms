@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, getDefaultFarmId } = require('../db');
 const { authenticate, requirePrimaryOwner } = require('../middleware/auth');
 const { requireMinimumRole } = require('../middleware/roles');
+const { validate, inventoryItemSchema, inventoryMovementSchema } = require('../middleware/validate');
 const {
   mapInventoryItem,
   mapInventoryMovement,
@@ -13,16 +14,16 @@ const { insertLinkedLedgerTransaction, auditLog } = require('../services/transac
 
 const router = express.Router();
 
-router.get('/items', authenticate, async (req, res) => {
+router.get('/items', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     res.json(await getInventoryItems(farmId, req.query.category || null));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/items', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/items', authenticate, requireMinimumRole('OperationManager'), validate(inventoryItemSchema), async (req, res, next) => {
   const { name, category, unit, targetQuantity, reorderLevel } = req.body;
 
   if (!name?.trim() || !category?.trim() || !unit?.trim()) {
@@ -59,11 +60,11 @@ router.post('/items', authenticate, requireMinimumRole('OperationManager'), asyn
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Inventory item already exists' });
     }
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.patch('/items/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.patch('/items/:id', authenticate, requirePrimaryOwner, validate(inventoryItemSchema), async (req, res, next) => {
   const { name, category, unit, targetQuantity, reorderLevel, isActive = true } = req.body;
 
   try {
@@ -107,11 +108,11 @@ router.patch('/items/:id', authenticate, requirePrimaryOwner, async (req, res) =
 
     res.json((await getInventoryItems(farmId)).find((item) => item.id === Number(req.params.id)) || mapInventoryItem(result.rows[0]));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/movements', authenticate, async (req, res) => {
+router.get('/movements', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const params = [farmId];
@@ -157,11 +158,11 @@ router.get('/movements', authenticate, async (req, res) => {
 
     res.json(result.rows.map(mapInventoryMovement));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/movements', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/movements', authenticate, requireMinimumRole('OperationManager'), validate(inventoryMovementSchema), async (req, res, next) => {
   const {
     batchId,
     itemId,
@@ -265,7 +266,7 @@ router.post('/movements', authenticate, requireMinimumRole('OperationManager'), 
     res.status(201).json(mapInventoryMovement(saved.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }

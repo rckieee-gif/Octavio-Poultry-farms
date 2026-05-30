@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, getDefaultFarmId } = require('../db');
 const { authenticate, requirePrimaryOwner } = require('../middleware/auth');
 const { requireMinimumRole } = require('../middleware/roles');
+const { validate, transactionSchema } = require('../middleware/validate');
 const { parseQuickEntryWithAi } = require('../../lib/quickEntryAiParser');
 const {
   getTransactions,
@@ -16,50 +17,50 @@ const {
 const router = express.Router();
 
 // 1. Transaction Retrieval routes
-router.get('/', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     res.json(await getTransactions(req.query.batchId || null, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     res.json(await getTransactions(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
 // 2. Transaction Mutation routes
-router.post('/', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
-  await createTransaction(req, res);
+router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(transactionSchema), async (req, res, next) => {
+  await createTransaction(req, res, next);
 });
 
-router.post('/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
-  await createTransaction(req, res, req.params.batchId);
+router.post('/batches/:batchId/transactions', authenticate, requireMinimumRole('OperationManager'), validate(transactionSchema), async (req, res, next) => {
+  await createTransaction(req, res, next, req.params.batchId);
 });
 
-router.patch('/batches/:batchId/transactions/:id', authenticate, requirePrimaryOwner, async (req, res) => {
-  await updateTransaction(req, res, req.params.batchId, req.params.id);
+router.patch('/batches/:batchId/transactions/:id', authenticate, requirePrimaryOwner, validate(transactionSchema), async (req, res, next) => {
+  await updateTransaction(req, res, next, req.params.batchId, req.params.id);
 });
 
 // 3. Voiding / Deleting routes
-router.post('/batches/:batchId/transactions/:id/void', authenticate, requirePrimaryOwner, async (req, res) => {
-  await voidTransaction(req, res, req.params.id, req.params.batchId);
+router.post('/batches/:batchId/transactions/:id/void', authenticate, requirePrimaryOwner, async (req, res, next) => {
+  await voidTransaction(req, res, next, req.params.id, req.params.batchId);
 });
 
-router.post('/:id/void', authenticate, requirePrimaryOwner, async (req, res) => {
-  await voidTransaction(req, res, req.params.id);
+router.post('/:id/void', authenticate, requirePrimaryOwner, async (req, res, next) => {
+  await voidTransaction(req, res, next, req.params.id);
 });
 
-router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
-  await voidTransaction(req, res, req.params.id);
+router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
+  await voidTransaction(req, res, next, req.params.id);
 });
 
 // 4. Audit Log routes
-router.get('/batches/:batchId/audit-logs', authenticate, requirePrimaryOwner, async (req, res) => {
+router.get('/batches/:batchId/audit-logs', authenticate, requirePrimaryOwner, async (req, res, next) => {
   try {
     res.json(await getAuditLogs({
       farmId: req.user.farm_id || await getDefaultFarmId(),
@@ -69,11 +70,11 @@ router.get('/batches/:batchId/audit-logs', authenticate, requirePrimaryOwner, as
       limit: req.query.limit || 100,
     }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/:id/audit-logs', authenticate, requirePrimaryOwner, async (req, res) => {
+router.get('/:id/audit-logs', authenticate, requirePrimaryOwner, async (req, res, next) => {
   try {
     res.json(await getAuditLogs({
       farmId: req.user.farm_id || await getDefaultFarmId(),
@@ -82,12 +83,12 @@ router.get('/:id/audit-logs', authenticate, requirePrimaryOwner, async (req, res
       limit: req.query.limit || 100,
     }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
 // 5. Financial Summaries
-router.get('/batches/:batchId/opex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/opex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -101,11 +102,11 @@ router.get('/batches/:batchId/opex-summary', authenticate, requireMinimumRole('O
     );
     res.json(result.rows.map(row => ({ ...row, totalAmount: Number(row.totalAmount || 0) })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/batches/:batchId/capex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/capex-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -119,28 +120,28 @@ router.get('/batches/:batchId/capex-summary', authenticate, requireMinimumRole('
     );
     res.json(result.rows.map(row => ({ ...row, totalAmount: Number(row.totalAmount || 0) })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/batches/:batchId/receivables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/receivables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     res.json(await getReceivablesSummary(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/batches/:batchId/payables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/payables-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     res.json(await getPayablesSummary(req.params.batchId, req.user.farm_id || await getDefaultFarmId()));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
 // 6. Quick Entry AI route
-router.post('/quick-entry', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/quick-entry', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   const { text, today, building, paidBy } = req.body;
 
   if (!text || typeof text !== 'string') {
@@ -179,7 +180,7 @@ router.post('/quick-entry', authenticate, requireMinimumRole('OperationManager')
       userId: req.user.id,
       message: err.message,
     });
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 

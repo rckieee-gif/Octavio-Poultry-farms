@@ -862,7 +862,7 @@ async function importBatchArchive(client, req, farmId, archive) {
   return summary;
 }
 
-router.post('/import', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/import', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   const { importType, content, filename } = req.body || {};
 
   if (!importType || !content) {
@@ -903,13 +903,13 @@ router.post('/import', authenticate, requireMinimumRole('OperationManager'), asy
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('Failed to import settings data:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.get('/export', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/export', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   const dataset = req.query.dataset || 'transactions';
   const batchId = req.query.batchId || null;
 
@@ -1079,11 +1079,11 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
     return res.status(400).json({ error: 'Unknown export dataset.' });
   } catch (err) {
     console.error('Failed to export settings data:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/archive', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/archive', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   const batchId = req.query.batchId || null;
 
   try {
@@ -1198,7 +1198,7 @@ router.get('/archive', authenticate, requireMinimumRole('OperationManager'), asy
     });
   } catch (err) {
     console.error('Failed to create archive:', err);
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 

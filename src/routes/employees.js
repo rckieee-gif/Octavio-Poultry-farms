@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, getDefaultFarmId } = require('../db');
 const { authenticate, requirePrimaryOwner } = require('../middleware/auth');
 const { requireMinimumRole } = require('../middleware/roles');
+const { validate, employeeSchema, employeeCompensationSchema } = require('../middleware/validate');
 const {
   mapEmployee,
   buildEmployeeMetadata,
@@ -16,7 +17,7 @@ const { auditLog } = require('../services/transactions.service');
 const router = express.Router();
 
 // 1. Employee Profile Routes
-router.get('/', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -46,11 +47,11 @@ router.get('/', authenticate, requireMinimumRole('OperationManager'), async (req
 
     res.json(result.rows.map(mapEmployee));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(employeeSchema), async (req, res, next) => {
   const {
     name,
     displayName,
@@ -147,13 +148,13 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), async (re
     res.status(existing.rowCount > 0 ? 200 : 201).json(saved);
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.patch('/:id', authenticate, requirePrimaryOwner, validate(employeeSchema), async (req, res, next) => {
   const {
     name,
     displayName,
@@ -241,13 +242,13 @@ router.patch('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
     res.json(saved);
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
+router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -279,14 +280,14 @@ router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res) => {
     res.json({ message: 'Employee archived' });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
 // 2. Employee Batch-Compensation and Payroll Routes
-router.get('/batches/:batchId/employee-compensations', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/employee-compensations', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -319,11 +320,11 @@ router.get('/batches/:batchId/employee-compensations', authenticate, requireMini
 
     res.json(result.rows.map(mapEmployeeCompensation));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/batches/:batchId/employee-pay-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res) => {
+router.get('/batches/:batchId/employee-pay-summary', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const batch = await pool.query(
@@ -426,11 +427,11 @@ router.get('/batches/:batchId/employee-pay-summary', authenticate, requireMinimu
 
     res.json({ batchId: req.params.batchId, totals, rows });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.put('/batches/:batchId/employee-compensations/:employeeId', authenticate, requirePrimaryOwner, async (req, res) => {
+router.put('/batches/:batchId/employee-compensations/:employeeId', authenticate, requirePrimaryOwner, validate(employeeCompensationSchema), async (req, res, next) => {
   const client = await pool.connect();
 
   try {
@@ -534,13 +535,13 @@ router.put('/batches/:batchId/employee-compensations/:employeeId', authenticate,
     res.json(mapEmployeeCompensation(saved.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    next(err);
   } finally {
     client.release();
   }
 });
 
-router.get('/batches/:batchId/employee-assignments', authenticate, async (req, res) => {
+router.get('/batches/:batchId/employee-assignments', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
     const result = await pool.query(
@@ -572,7 +573,7 @@ router.get('/batches/:batchId/employee-assignments', authenticate, async (req, r
 
     res.json(result.rows.map(mapEmployeeCompensation));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
