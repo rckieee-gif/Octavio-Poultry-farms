@@ -27,3 +27,9 @@ jobs:
 
     - name: Syntax check
       run: node --check server.js
+
+    # TODO: Add a safe test database environment, then run backend migrations and regression tests
+    # - name: Run migrations on test DB
+    #   run: npm run db:migrate
+    # - name: Run regression test
+    #   run: npm run test:regression

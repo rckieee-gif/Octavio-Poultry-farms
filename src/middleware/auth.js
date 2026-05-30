@@ -44,7 +44,7 @@ async function authenticate(req, res, next) {
 
 function requirePrimaryOwner(req, res, next) {
   if (!req.user?.is_primary_owner) {
-    return res.status(403).json({ error: 'Only admin.roland can perform this action.' });
+    return res.status(403).json({ error: 'Only the primary owner can perform this action.' });
   }
   next();
 }
