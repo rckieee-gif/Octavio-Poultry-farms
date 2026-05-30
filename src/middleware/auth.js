@@ -3,6 +3,11 @@ const { pool } = require('../db');
 const { normalizeRole } = require('./roles');
 
 const JWT_SECRET = process.env.JWT_SECRET;
+
+if (process.env.NODE_ENV === 'production' && !JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in production.');
+}
+
 const JWT_SIGNING_SECRET = JWT_SECRET || 'dev-only-secret';
 
 async function authenticate(req, res, next) {

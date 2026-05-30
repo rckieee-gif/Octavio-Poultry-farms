@@ -58,8 +58,8 @@ The check logs in, picks `REGRESSION_BATCH_ID` or the active batch, parses quick
 Optional environment overrides:
 
 - `REGRESSION_API_BASE=http://localhost:5000`
-- `REGRESSION_LOGIN=admin.roland`
-- `REGRESSION_PASSWORD=121232`
+- `REGRESSION_LOGIN=your-test-owner-login`
+- `REGRESSION_PASSWORD=your-test-owner-password`
 - `REGRESSION_BATCH_ID=20260418`
 - `REGRESSION_EMPLOYEE_NAME=Jane`
 - `REGRESSION_PAID_BY=Rolly`
