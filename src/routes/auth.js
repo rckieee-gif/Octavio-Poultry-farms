@@ -13,6 +13,7 @@ function getAuthCookieOptions() {
     httpOnly: true,
     secure: isProductionEnv,
     sameSite: isProductionEnv ? 'none' : 'lax',
+    path: '/',
   };
 }
 

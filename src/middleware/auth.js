@@ -3,16 +3,34 @@ const { pool } = require('../db');
 const { normalizeRole } = require('./roles');
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const isDevOrTest = !process.env.NODE_ENV || ['development', 'test'].includes(process.env.NODE_ENV);
 
-if (process.env.NODE_ENV === 'production' && !JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production.');
+if (!isDevOrTest && !JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in deployed environments.');
 }
 
 const JWT_SIGNING_SECRET = JWT_SECRET || 'dev-only-secret';
 
 async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token && req.headers.cookie) {
+    const cookies = {};
+    req.headers.cookie.split(';').forEach(c => {
+      const parts = c.split('=');
+      if (parts.length >= 2) {
+        cookies[parts[0].trim()] = parts.slice(1).join('=').trim();
+      }
+    });
+    if (cookies.token) {
+      try {
+        token = decodeURIComponent(cookies.token);
+      } catch {
+        token = cookies.token;
+      }
+    }
+  }
 
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
@@ -31,6 +49,7 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'Invalid user' });
     }
 
+    req.token = token;
     req.user = {
       ...result.rows[0],
       role: normalizeRole(result.rows[0].role),

@@ -101,6 +101,7 @@ test.describe('Authentication API & Middleware', () => {
         httpOnly: true,
         secure: true,
         sameSite: 'none',
+        path: '/',
       });
     } finally {
       process.env.NODE_ENV = originalNodeEnv;

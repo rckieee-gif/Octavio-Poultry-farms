@@ -11,6 +11,7 @@
     "dev": "nodemon server.js",
     "test:regression": "node testEndToEnd.js",
     "test:idempotency": "node testIdempotency.js",
+    "test:env": "node testEnvironmentValidation.js",
     "test:unit": "node --test src/__tests__/**/*.test.js",
     "test": "npm run test:unit",
     "db:migrate": "node scripts/migrate.js",
