@@ -12,6 +12,7 @@ const logsRouter = require('./routes/logs');
 const aiRouter = require('./routes/ai');
 const settingsRouter = require('./routes/settings');
 const masterDataRouter = require('./routes/masterData');
+const idempotencyMiddleware = require('./middleware/idempotency');
 
 const app = express();
 
@@ -51,6 +52,9 @@ app.use('/api', limiter);
 
 // 4. Reduced JSON body limit
 app.use(express.json({ limit: '2mb' }));
+
+// Idempotency check for queued offline mutations
+app.use('/api', idempotencyMiddleware);
 
 // 5. Register Domain Routes
 app.use('/api/auth', authRouter);
