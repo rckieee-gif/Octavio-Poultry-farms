@@ -7,6 +7,15 @@ const { normalizeRole } = require('../middleware/roles');
 
 const router = express.Router();
 
+function getAuthCookieOptions() {
+  const isProductionEnv = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProductionEnv,
+    sameSite: isProductionEnv ? 'none' : 'lax',
+  };
+}
+
 router.post('/login', async (req, res, next) => {
   const login = (req.body.login || req.body.email || req.body.username || '').trim();
   const { password } = req.body;
@@ -42,12 +51,16 @@ router.post('/login', async (req, res, next) => {
     const token = jwt.sign(
       { userId: user.id, role: normalizedRole, email: user.email, username: user.username },
       JWT_SIGNING_SECRET,
-      { expiresIn: '12h' }
+      { expiresIn: '4h' }
     );
+
+    res.cookie('token', token, {
+      ...getAuthCookieOptions(),
+      maxAge: 4 * 60 * 60 * 1000 // 4 hours
+    });
 
     res.json({
       message: 'Login successful',
-      token,
       user: {
         email: user.email,
         username: user.username || '',
@@ -59,6 +72,11 @@ router.post('/login', async (req, res, next) => {
     console.error('SERVER ERROR DURING LOGIN:', err);
     next(err);
   }
+});
+
+router.post('/logout', (req, res) => {
+  res.clearCookie('token', getAuthCookieOptions());
+  res.json({ message: 'Logout successful' });
 });
 
 router.get('/me', authenticate, (req, res) => {
@@ -113,3 +131,4 @@ router.post('/change-password', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.getAuthCookieOptions = getAuthCookieOptions;
