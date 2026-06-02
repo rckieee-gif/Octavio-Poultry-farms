@@ -4,7 +4,8 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
-const { router: batchesRouter, getCurrentBatchSnapshot } = require('./routes/batches');
+const { router: batchesRouter } = require('./routes/batches');
+const { getCurrentBatchSnapshot } = require('./services/batches.service');
 const transactionsRouter = require('./routes/transactions');
 const inventoryRouter = require('./routes/inventory');
 const employeesRouter = require('./routes/employees');
@@ -67,6 +68,7 @@ app.use(express.json({ limit: '2mb' }));
 
 // Idempotency check for queued offline mutations
 app.use('/api', idempotencyMiddleware);
+
 // OpenAPI / Swagger interactive documentation routes
 app.get('/api-docs/openapi.json', (req, res) => {
   res.json(openapiSpec);
@@ -112,7 +114,6 @@ app.get('/api-docs', (req, res) => {
   </body>
 </html>`);
 });
-
 
 // 5. Register Domain Routes
 app.use('/api/auth', authRouter);
