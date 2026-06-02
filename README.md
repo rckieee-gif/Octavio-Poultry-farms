@@ -31,6 +31,15 @@ Optional Gemini/OpenAI AI features:
 - `OPENAI_MODEL=gpt-4o-mini`
 - `AI_PARSER_DISABLED=false`
 
+## API Documentation & Contract
+
+The backend exposes an interactive OpenAPI/Swagger documentation site:
+
+- **Swagger UI**: `/api-docs` (loaded via CDN)
+- **Raw OpenAPI Spec**: `/api-docs/openapi.json`
+
+Developers can visit `/api-docs` on a running local server (e.g. `http://localhost:5000/api-docs`) to view request/response schemas, parameter validators, required user role limits, and interactively invoke endpoints using the **"Try it out"** feature.
+
 ## Quick Entry
 
 `POST /api/quick-entry` parses natural-language ledger text into the same fields used by `POST /api/batches/:batchId/transactions`.

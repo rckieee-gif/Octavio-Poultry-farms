@@ -14,6 +14,8 @@ const settingsRouter = require('./routes/settings');
 const masterDataRouter = require('./routes/masterData');
 const idempotencyMiddleware = require('./middleware/idempotency');
 
+const openapiSpec = require('./openapi.json');
+
 const app = express();
 
 // 1. CORS with Restricted Origin Matching
@@ -37,8 +39,18 @@ app.use(cors({
   credentials: true,
 }));
 
-// 2. Helmet Security Headers (Content Security Policy, XSS Protection, etc.)
-app.use(helmet());
+// 2. Helmet Security Headers (Content Security Policy adjusted for Swagger UI CDN)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "unpkg.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "unpkg.com"],
+      imgSrc: ["'self'", "data:", "unpkg.com"],
+      connectSrc: ["'self'"],
+    },
+  },
+}));
 
 // 3. Global Rate Limiting for API routes
 const limiter = rateLimit({
@@ -55,6 +67,52 @@ app.use(express.json({ limit: '2mb' }));
 
 // Idempotency check for queued offline mutations
 app.use('/api', idempotencyMiddleware);
+// OpenAPI / Swagger interactive documentation routes
+app.get('/api-docs/openapi.json', (req, res) => {
+  res.json(openapiSpec);
+});
+
+app.get('/api-docs', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Octavio Poultry Farm API Documentation</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@5/favicon-32x32.png" sizes="32x32" />
+    <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@5/favicon-16x16.png" sizes="16x16" />
+    <style>
+      html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+      *, *:before, *:after { box-sizing: inherit; }
+      body { margin: 0; background: #fafafa; }
+    </style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"> </script>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js" charset="UTF-8"> </script>
+    <script>
+      window.onload = function() {
+        const ui = SwaggerUIBundle({
+          url: "/api-docs/openapi.json",
+          dom_id: '#swagger-ui',
+          deepLinking: true,
+          presets: [
+            SwaggerUIBundle.presets.apis,
+            SwaggerUIStandalonePreset
+          ],
+          plugins: [
+            SwaggerUIBundle.plugins.DownloadUrl
+          ],
+          layout: "BaseLayout"
+        });
+        window.ui = ui;
+      };
+    </script>
+  </body>
+</html>`);
+});
+
 
 // 5. Register Domain Routes
 app.use('/api/auth', authRouter);

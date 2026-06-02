@@ -1,0 +1,2233 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Octavio Poultry Farm API Documentation",
+    "description": "API contract and interactive documentation for the Octavio Poultry Farm management backend. Defines schemas, routes, parameters, and role-based permissions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "API Base URL (relies on browser host or proxy)"
+    }
+  ],
+  "security": [
+    {
+      "CookieAuth": []
+    },
+    {
+      "BearerAuth": []
+    }
+  ],
+  "tags": [
+    { "name": "Authentication", "description": "User login, session retrieval, and profile security" },
+    { "name": "Batches", "description": "Manage flock cycles, building-level chick loadings, and harvest production reports" },
+    { "name": "Inventory", "description": "Register feeds, chicks, medicines, and record movements/adjustments" },
+    { "name": "Employees & Payroll", "description": "Manage employees profiles, building assignments, and batch-wise payroll/reimbursements" },
+    { "name": "Daily Logs", "description": "Record daily mortality, feed consumption, and bird weight logs by building" },
+    { "name": "Transactions & Ledger", "description": "Post and void opex, capex, and revenue transactions, view ledger logs, and quick entry" },
+    { "name": "Admin", "description": "User account provisioning, roles assignment, and system audit logs" },
+    { "name": "Settings & Data Exchange", "description": "Import settings, export database records, and download historical archives" },
+    { "name": "Master Reference Data", "description": "Fetch static categories, active buildings, and stakeholders list" },
+    { "name": "Public / AI Chat", "description": "Public status summary and natural language operational assistance chatbot" }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Log in and create session",
+        "description": "Authenticates a user via email/username and password. On success, issues a secure HttpOnly token cookie and returns user profile metadata.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "login": { "type": "string", "example": "admin" },
+                  "email": { "type": "string", "example": "user@example.com" },
+                  "username": { "type": "string", "example": "admin" },
+                  "password": { "type": "string", "example": "password123" }
+                },
+                "required": ["password"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful login",
+            "headers": {
+              "Set-Cookie": {
+                "schema": { "type": "string" },
+                "description": "Contains JWT token; httpOnly; Secure (in prod); SameSite=Lax"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Login successful" },
+                    "user": { "$ref": "#/components/schemas/UserProfile" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing credentials" },
+          "401": { "description": "Invalid credentials or inactive account" }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Log out and clear session cookie",
+        "description": "Clears the HttpOnly 'token' cookie from the browser.",
+        "responses": {
+          "200": {
+            "description": "Cookie cleared successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Logout successful" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Get authenticated user information",
+        "description": "Returns details of the currently authenticated session.",
+        "responses": {
+          "200": {
+            "description": "Current user profile info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": { "$ref": "#/components/schemas/UserSession" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized session" }
+        }
+      }
+    },
+    "/auth/change-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Change password",
+        "description": "Updates password for the currently logged-in user. Requires current password verification.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentPassword": { "type": "string", "example": "oldPassword123" },
+                  "newPassword": { "type": "string", "minLength": 8, "example": "newPassword456" }
+                },
+                "required": ["currentPassword", "newPassword"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Password changed successfully." }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing inputs or new password too short" },
+          "401": { "description": "Current password is incorrect or session expired" }
+        }
+      }
+    },
+    "/batches": {
+      "get": {
+        "tags": ["Batches"],
+        "summary": "List all batch cycles",
+        "description": "Returns a list of all batch cycles recorded for the authenticated user's farm.",
+        "responses": {
+          "200": {
+            "description": "List of batches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Batch" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Batches"],
+        "summary": "Create a new batch cycle",
+        "description": "Registers a new flock cycle. Requires role: OperationManager or PrimaryOwner. Validates and initializes defaults for building-level loadings.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BatchCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Batch created successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Batch" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires OperationManager" }
+        }
+      }
+    },
+    "/batches/active": {
+      "get": {
+        "tags": ["Batches"],
+        "summary": "Get the active batch snapshot",
+        "description": "Returns the single batch currently in 'Active' status for the user's farm, or 404 if no active batch is found.",
+        "responses": {
+          "200": {
+            "description": "Active batch metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Batch" }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "No active batch found" }
+        }
+      }
+    },
+    "/batches/{id}": {
+      "patch": {
+        "tags": ["Batches"],
+        "summary": "Update batch cycle details",
+        "description": "Modifies the details or status of a batch. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BatchCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch updated successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Batch" }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires PrimaryOwner" },
+          "404": { "description": "Batch not found or farm scoping violation" }
+        }
+      },
+      "delete": {
+        "tags": ["Batches"],
+        "summary": "Delete/archive batch cycle",
+        "description": "Archives or deletes a batch. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batch deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Batch deleted" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires PrimaryOwner" },
+          "404": { "description": "Batch not found or farm scoping violation" }
+        }
+      }
+    },
+    "/batches/{batchId}/loadings": {
+      "get": {
+        "tags": ["Batches"],
+        "summary": "Get building loadings for a batch",
+        "description": "Retrieves the loaded chick count and percentage distribution assigned to each building for a specific batch.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of loadings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/LoadingItem" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "put": {
+        "tags": ["Batches"],
+        "summary": "Update building loadings for a batch",
+        "description": "Overwrites building loading allocations. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "loadings": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/LoadingItem" }
+                  }
+                },
+                "required": ["loadings"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Loadings updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Loadings updated" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires PrimaryOwner" },
+          "404": { "description": "Batch not found or farm scoping violation" }
+        }
+      }
+    },
+    "/batches/{batchId}/harvest-production-summary": {
+      "get": {
+        "tags": ["Batches"],
+        "summary": "Get production metrics summary for a batch",
+        "description": "Calculates cycle metrics including total feed consumed, total mortality count, survival rate percentage, total opex, capex, and revenues.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cycle metric summary object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "batchId": { "type": "string", "example": "20260418" },
+                    "feedConsumedBags": { "type": "number", "example": 1250 },
+                    "mortality": { "type": "integer", "example": 840 },
+                    "survivalRatePct": { "type": "number", "example": 96.5 },
+                    "opexTotal": { "type": "number", "example": 150000.5 },
+                    "capexTotal": { "type": "number", "example": 25000 },
+                    "revenueTotal": { "type": "number", "example": 450000 }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/batches/{batchId}/harvest-report": {
+      "get": {
+        "tags": ["Batches"],
+        "summary": "Get harvest details and sales report",
+        "description": "Retrieves the multi-harvest events, chicken sales, byproduct sales, and tolling financing adjustments for a completed flock cycle. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Harvest report data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HarvestReport" }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires OperationManager" }
+        }
+      },
+      "put": {
+        "tags": ["Batches"],
+        "summary": "Save harvest report details",
+        "description": "Saves or updates the detailed harvest event sheets, byproduct listings, sales weight details, and financing entries. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/HarvestReport" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Report saved successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HarvestReport" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires OperationManager" }
+        }
+      }
+    },
+    "/batches/{batchId}/harvest-report/post-ledger": {
+      "post": {
+        "tags": ["Batches"],
+        "summary": "Commit harvest metrics to the ledger",
+        "description": "Aggregates harvest chicken sales and byproduct revenues, and automatically creates corresponding daily ledger transactions under a single transaction block. Voiding actions are tracked. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully posted transaction entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "postedCount": { "type": "integer", "example": 4 },
+                    "message": { "type": "string", "example": "Posted 4 ledger entries." }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden - requires OperationManager" }
+        }
+      }
+    },
+    "/inventory/items": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "List inventory items",
+        "description": "Retrieves active stock categories and catalog configurations. Supports filtering by optional item categories (e.g., 'Feed', 'Chicks', 'Medicine', 'Equipment').",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Item category filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/InventoryItem" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Register a new inventory item",
+        "description": "Registers an item unit template. Requires role: OperationManager or PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InventoryItemCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InventoryItem" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "409": { "description": "Duplicate item name collision" }
+        }
+      }
+    },
+    "/inventory/items/{id}": {
+      "patch": {
+        "tags": ["Inventory"],
+        "summary": "Update catalog settings for an item",
+        "description": "Modifies inventory properties, target quotas, unit definitions, and active toggles. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Inventory Item numerical ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InventoryItemCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InventoryItem" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "404": { "description": "Item not found or farm scoping violation" }
+        }
+      }
+    },
+    "/inventory/movements": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "List stock movements and audits",
+        "description": "Fetch real-time stock-in, usage, adjustments, and feed write-off history.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Filter by batch ID"
+          },
+          {
+            "name": "itemId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer" },
+            "description": "Filter by inventory item ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of movements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/InventoryMovement" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Post stock movement log",
+        "description": "Creates an inventory flow ledger. If the payload indicates 'createLedger=true', automatically registers a matching opex/capex transaction on the cash ledger. Requires role: OperationManager or PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InventoryMovementCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created transaction",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InventoryMovement" }
+              }
+            }
+          },
+          "400": { "description": "Validation or missing properties" },
+          "404": { "description": "Inventory Item not found" }
+        }
+      }
+    },
+    "/employees": {
+      "get": {
+        "tags": ["Employees & Payroll"],
+        "summary": "List active employees",
+        "description": "Retrieves profile settings, displays, phone, addresses, and hire histories. Requires role: OperationManager or PrimaryOwner.",
+        "responses": {
+          "200": {
+            "description": "List of active employees",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Employee" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Employees & Payroll"],
+        "summary": "Create an employee profile",
+        "description": "Registers a new employee stakeholder profile. Requires role: OperationManager or PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmployeeCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Employee profile created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Employee" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "409": { "description": "Stakeholder name collision" }
+        }
+      }
+    },
+    "/employees/{id}": {
+      "patch": {
+        "tags": ["Employees & Payroll"],
+        "summary": "Update an employee profile",
+        "description": "Updates profile configurations. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Employee stakeholder ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmployeeCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated profile returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Employee" }
+              }
+            }
+          },
+          "404": { "description": "Employee profile not found" }
+        }
+      },
+      "delete": {
+        "tags": ["Employees & Payroll"],
+        "summary": "Archive/Deactivate employee profile",
+        "description": "Sets active toggle status to false. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Employee stakeholder ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile deactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Employee archived" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "Employee profile not found" }
+        }
+      }
+    },
+    "/batches/{batchId}/employee-compensations": {
+      "get": {
+        "tags": ["Employees & Payroll"],
+        "summary": "List batch compensation rates for all active employees",
+        "description": "Retrieves bird counts, base rates, and assignments linked to a specific cycle. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of employee compensations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/EmployeeCompensation" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Batch not found" }
+        }
+      }
+    },
+    "/batches/{batchId}/employee-assignments": {
+      "get": {
+        "tags": ["Employees & Payroll"],
+        "summary": "List active assignments for a batch",
+        "description": "Fetch list of employees, building placements, and bird shares for operations checking.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/EmployeeCompensation" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Batch not found" }
+        }
+      }
+    },
+    "/batches/{batchId}/employee-compensations/{employeeId}": {
+      "put": {
+        "tags": ["Employees & Payroll"],
+        "summary": "Update compensation parameters for an employee",
+        "description": "Saves bird shares, rate scales, and groups for payroll calculations. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          },
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Employee numerical ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmployeeCompensationUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully updated compensation record",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmployeeCompensation" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "404": { "description": "Batch or employee not found" }
+        }
+      }
+    },
+    "/batches/{batchId}/employee-pay-summary": {
+      "get": {
+        "tags": ["Employees & Payroll"],
+        "summary": "Retrieve complete cycle payroll matrix",
+        "description": "Calculates complete paysheet for a cycle. Factors in: bird rates, building mortality counts, cash advances, and payroll reimbursements. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consolidated payroll report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "batchId": { "type": "string" },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "grossHandledBirds": { "type": "integer" },
+                        "mortality": { "type": "integer" },
+                        "netHandledBirds": { "type": "integer" },
+                        "payableBirds": { "type": "integer" },
+                        "cycleIncome": { "type": "number" },
+                        "laborPaid": { "type": "number" },
+                        "outstandingAdvance": { "type": "number" },
+                        "remainingCyclePay": { "type": "number" },
+                        "netPayable": { "type": "number" }
+                      }
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/EmployeePayRow" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "Batch not found" }
+        }
+      }
+    },
+    "/logs": {
+      "get": {
+        "tags": ["Daily Logs"],
+        "summary": "List daily logs",
+        "description": "Retrieves daily operational reports (feed consumed, weights, mortalities). Supports filtering by batchId.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Filter by batch ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/DailyLog" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Daily Logs"],
+        "summary": "Submit a new daily operational log",
+        "description": "Registers daily mortality, weights, and feeds consumed. Generates automatic inventory write-downs. Requires role: DataEntry or above.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DailyLogCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Daily log registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DailyLog" }
+              }
+            }
+          },
+          "400": { "description": "Validation error or invalid assignment" },
+          "404": { "description": "Batch or employee profile not found" }
+        }
+      }
+    },
+    "/logs/{id}": {
+      "patch": {
+        "tags": ["Daily Logs"],
+        "summary": "Update daily operational log",
+        "description": "Modifies historical log variables. Recalculates and updates linked inventory stock movements. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Daily log numerical ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DailyLogCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated log sheet returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DailyLog" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "404": { "description": "Log not found or scoping violation" }
+        }
+      },
+      "delete": {
+        "tags": ["Daily Logs"],
+        "summary": "Delete a daily operational log",
+        "description": "Deletes log records and removes associated inventory changes. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Daily log numerical ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Log deleted" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "Log not found or scoping violation" }
+        }
+      }
+    },
+    "/transactions": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "List all transactions",
+        "description": "Retrieves transactions ledger records. Supports batch filtering.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Filter by batch ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Transaction" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Post a new cash ledger transaction",
+        "description": "Inserts cash ledger entry. Requires role: OperationManager or PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TransactionCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transaction created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Transaction" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/batches/{batchId}/transactions": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "List transactions for a batch",
+        "description": "Retrieves all financial movements linked to a cycle. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of batch transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Transaction" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Post transaction under a batch",
+        "description": "Inserts transaction entry scoped to a batch. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TransactionCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created transaction",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Transaction" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batchId}/transactions/{id}": {
+      "patch": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Update transaction details",
+        "description": "Edits description, metadata, or financial details. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Transaction numerical ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TransactionCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated transaction record",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Transaction" }
+              }
+            }
+          },
+          "404": { "description": "Transaction not found or scoping violation" }
+        }
+      }
+    },
+    "/batches/{batchId}/transactions/{id}/void": {
+      "post": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Void a batch transaction",
+        "description": "Flags a transaction as voided. Automatically voids linked inventory updates. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Transaction numerical ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction flagged as voided",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Transaction" }
+              }
+            }
+          },
+          "404": { "description": "Transaction not found or scoping violation" }
+        }
+      }
+    },
+    "/transactions/{id}/void": {
+      "post": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Void a transaction",
+        "description": "Flags a global ledger entry as void. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Transaction numerical ID"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Void successful" }
+        }
+      }
+    },
+    "/transactions/{id}": {
+      "delete": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Void transaction (DELETE proxy)",
+        "description": "Proxies to voidTransaction to flag as inactive. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Transaction numerical ID"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Successfully voided" }
+        }
+      }
+    },
+    "/batches/{batchId}/audit-logs": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "List audit logs for a batch",
+        "description": "Retrieves the structural audit log of database creates, updates, and deletes for tracking. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Batch code / ID"
+          },
+          {
+            "name": "entityType",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Entity category (e.g. 'daily_log', 'daily_transaction')"
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Specific entity identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of audit records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AuditLog" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transactions/{id}/audit-logs": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Get audit logs for a specific transaction",
+        "description": "Returns update logs for a transaction. Requires role: PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Transaction ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of audit logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AuditLog" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batchId}/opex-summary": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Get OPEX breakdown summary",
+        "description": "Retrieves summarized expenses by category. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OPEX summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "category": { "type": "string" },
+                      "totalAmount": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batchId}/capex-summary": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Get CAPEX breakdown summary",
+        "description": "Retrieves summarized capital investments by category. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CAPEX summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "category": { "type": "string" },
+                      "totalAmount": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batchId}/receivables-summary": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Get receivables breakdown summary",
+        "description": "Aggregates revenue and payments by customer. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receivables summary list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batchId}/payables-summary": {
+      "get": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Get payables breakdown summary",
+        "description": "Aggregates outstanding payroll and feed purchase balances. Requires role: OperationManager or PrimaryOwner.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payables list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quick-entry": {
+      "post": {
+        "tags": ["Transactions & Ledger"],
+        "summary": "Natural language transaction parser",
+        "description": "Parses unformatted multilingual text input (Visaya, Tagalog, English) into cash ledger schemas. Fallback parser activates if AI is disabled. Requires role: OperationManager or PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": { "type": "string", "example": "paid 500 for feeds" },
+                  "today": { "type": "string", "example": "2026-06-01" },
+                  "building": { "type": "string", "example": "A" },
+                  "paidBy": { "type": "string", "example": "Rolly" }
+                },
+                "required": ["text"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully parsed text attributes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "parsed": {
+                      "type": "object",
+                      "properties": {
+                        "date": { "type": "string" },
+                        "fundingNature": { "type": "string" },
+                        "category": { "type": "string" },
+                        "description": { "type": "string" },
+                        "amount": { "type": "number" },
+                        "confidence": { "type": "number" }
+                      }
+                    },
+                    "needsReview": { "type": "boolean" },
+                    "parserMode": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "List all logins/accounts",
+        "description": "Returns complete login user registrations. Requires role: PrimaryOwner.",
+        "responses": {
+          "200": {
+            "description": "List of user accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/UserAdminRecord" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Admin"],
+        "summary": "Provision a new login account",
+        "description": "Registers a new authentication record and connects it to a stakeholder. Requires role: PrimaryOwner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stakeholderId": { "type": "integer" },
+                  "email": { "type": "string" },
+                  "username": { "type": "string" },
+                  "password": { "type": "string" },
+                  "role": { "type": "string", "enum": ["Viewer", "DataEntry", "OperationManager", "PrimaryOwner"] },
+                  "isActive": { "type": "boolean", "default": true }
+                },
+                "required": ["email", "username", "password", "role"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Account created successfully" }
+        }
+      }
+    },
+    "/admin/users/{id}": {
+      "patch": {
+        "tags": ["Admin"],
+        "summary": "Edit user configuration or roles",
+        "description": "Updates password hashes, roles, or toggles status. Requires role: PrimaryOwner.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string" },
+                  "username": { "type": "string" },
+                  "password": { "type": "string" },
+                  "role": { "type": "string" },
+                  "isActive": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "User updated successfully" }
+        }
+      },
+      "delete": {
+        "tags": ["Admin"],
+        "summary": "Deactivate login credentials",
+        "description": "Sets user active to false, logging them out. Requires role: PrimaryOwner.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "User deactivated" }
+        }
+      }
+    },
+    "/admin/audit-logs": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "Global database audit logs",
+        "description": "Extracts global audit tracking. Requires role: PrimaryOwner.",
+        "responses": {
+          "200": {
+            "description": "List of audits",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AuditLog" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/import": {
+      "post": {
+        "tags": ["Settings & Data Exchange"],
+        "summary": "Import CSV file records",
+        "description": "Bulk inserts transaction and logging tables. Requires role: OperationManager or PrimaryOwner.",
+        "responses": {
+          "200": { "description": "Import success metadata" }
+        }
+      }
+    },
+    "/settings/export": {
+      "get": {
+        "tags": ["Settings & Data Exchange"],
+        "summary": "Download database records as CSV",
+        "description": "Retrieves bulk raw database rows in CSV format. Requires role: OperationManager or PrimaryOwner.",
+        "responses": {
+          "200": { "description": "File download" }
+        }
+      }
+    },
+    "/settings/archive": {
+      "get": {
+        "tags": ["Settings & Data Exchange"],
+        "summary": "Download complete system archive",
+        "description": "Retrieves zip export of complete historical cycles. Requires role: OperationManager or PrimaryOwner.",
+        "responses": {
+          "200": { "description": "Archive file download" }
+        }
+      }
+    },
+    "/buildings": {
+      "get": {
+        "tags": ["Master Reference Data"],
+        "summary": "List buildings",
+        "description": "Returns active building references with loading sharing configs.",
+        "responses": {
+          "200": {
+            "description": "Array of buildings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "integer" },
+                      "name": { "type": "string" },
+                      "loadingSharePercentage": { "type": "number" },
+                      "sortOrder": { "type": "integer" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories": {
+      "get": {
+        "tags": ["Master Reference Data"],
+        "summary": "List categories",
+        "description": "Returns active ledger item category tags.",
+        "responses": {
+          "200": {
+            "description": "Array of categories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "integer" },
+                      "fundingNature": { "type": "string" },
+                      "name": { "type": "string" },
+                      "sortOrder": { "type": "integer" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stakeholders": {
+      "get": {
+        "tags": ["Master Reference Data"],
+        "summary": "List all stakeholders",
+        "description": "Returns complete contact card listing (Employees, Buyers, Suppliers).",
+        "responses": {
+          "200": {
+            "description": "Array of stakeholders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "integer" },
+                      "name": { "type": "string" },
+                      "displayName": { "type": "string" },
+                      "type": { "type": "string" },
+                      "phone": { "type": "string", "nullable": true },
+                      "email": { "type": "string", "nullable": true },
+                      "address": { "type": "string", "nullable": true }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/current-batch": {
+      "get": {
+        "tags": ["Public / AI Chat"],
+        "summary": "Retrieve active batch without logging in",
+        "description": "Returns active flock code, notes, and metrics for public visibility widgets.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Active snapshot details",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Batch" }
+              }
+            }
+          },
+          "404": { "description": "No active batch" }
+        }
+      }
+    },
+    "/flockops-chat": {
+      "post": {
+        "tags": ["Public / AI Chat"],
+        "summary": "Submit operations questions to the assistant",
+        "description": "Feeds question payload to the operations model context, automatically parsing and enforcing role boundaries (restricting financials for viewers).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string", "example": "what was yesterday's mortality rate?" },
+                  "chatHistory": { "type": "array", "items": { "type": "object" } }
+                },
+                "required": ["message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reply text returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reply": { "type": "string", "example": "Yesterday, building A recorded 5 dead birds..." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Public / AI Chat"],
+        "summary": "System health check",
+        "description": "Simple keep-alive route.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Status payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean", "example": true },
+                    "service": { "type": "string", "example": "octavio-farm-api" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemas": {
+      "CookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "token",
+        "description": "Session token set via Cookie"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Authorization token using Bearer Header"
+      }
+    },
+    "schemas": {
+      "UserProfile": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "username": { "type": "string" },
+          "role": { "type": "string" },
+          "isPrimaryOwner": { "type": "boolean" }
+        }
+      },
+      "UserSession": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "username": { "type": "string" },
+          "role": { "type": "string" },
+          "stakeholderId": { "type": "integer", "nullable": true },
+          "isPrimaryOwner": { "type": "boolean" }
+        }
+      },
+      "UserAdminRecord": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "email": { "type": "string" },
+          "username": { "type": "string" },
+          "role": { "type": "string" },
+          "isActive": { "type": "boolean" },
+          "isPrimaryOwner": { "type": "boolean" },
+          "stakeholderId": { "type": "integer", "nullable": true }
+        }
+      },
+      "Batch": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "20260418" },
+          "batchCode": { "type": "string", "example": "20260418" },
+          "startDate": { "type": "string", "example": "2026-04-18" },
+          "targetHarvestDate": { "type": "string", "nullable": true, "example": "2026-05-28" },
+          "actualHarvestEndDate": { "type": "string", "nullable": true, "example": null },
+          "status": { "type": "string", "enum": ["Active", "Completed"], "example": "Active" },
+          "totalChicksLoaded": { "type": "integer", "example": 25000 },
+          "plannedFlock": { "type": "integer", "example": 25000 },
+          "targetFeedKg": { "type": "number", "example": 50000 },
+          "notes": { "type": "string", "example": "Initial setup notes." }
+        }
+      },
+      "BatchCreate": {
+        "type": "object",
+        "properties": {
+          "startDate": { "type": "string", "example": "2026-04-18" },
+          "targetHarvestDate": { "type": "string", "nullable": true, "example": "2026-05-28" },
+          "totalChicksLoaded": { "type": "integer", "example": 25000 },
+          "plannedFlock": { "type": "integer", "example": 25000 },
+          "targetFeedKg": { "type": "number", "example": 50000 },
+          "notes": { "type": "string", "nullable": true },
+          "status": { "type": "string", "enum": ["Active", "Completed"] },
+          "loadings": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LoadingItem" }
+          }
+        },
+        "required": ["startDate", "totalChicksLoaded", "plannedFlock", "targetFeedKg"]
+      },
+      "LoadingItem": {
+        "type": "object",
+        "properties": {
+          "building": { "type": "string", "example": "A" },
+          "buildingName": { "type": "string", "example": "A" },
+          "chicksLoaded": { "type": "integer", "example": 10000 },
+          "loadingSharePct": { "type": "number", "example": 40 },
+          "remarks": { "type": "string", "nullable": true }
+        }
+      },
+      "InventoryItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string", "example": "DOC Chicks" },
+          "category": { "type": "string", "example": "Chicks" },
+          "unit": { "type": "string", "example": "birds" },
+          "targetQuantity": { "type": "number" },
+          "reorderLevel": { "type": "number" },
+          "isActive": { "type": "boolean" },
+          "currentStock": { "type": "number" }
+        }
+      },
+      "InventoryItemCreate": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "category": { "type": "string" },
+          "unit": { "type": "string" },
+          "targetQuantity": { "type": "number" },
+          "reorderLevel": { "type": "number" },
+          "isActive": { "type": "boolean" }
+        },
+        "required": ["name", "category", "unit"]
+      },
+      "InventoryMovement": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "batchId": { "type": "string", "nullable": true },
+          "itemId": { "type": "integer" },
+          "itemName": { "type": "string" },
+          "category": { "type": "string" },
+          "unit": { "type": "string" },
+          "movementDate": { "type": "string" },
+          "movementType": { "type": "string", "enum": ["Stock In", "Stock Out", "Adjustment"] },
+          "quantity": { "type": "number" },
+          "unitCost": { "type": "number", "nullable": true },
+          "amount": { "type": "number", "nullable": true },
+          "building": { "type": "string" },
+          "sourceType": { "type": "string" },
+          "sourceId": { "type": "string" },
+          "linkedTransactionId": { "type": "integer", "nullable": true },
+          "remarks": { "type": "string", "nullable": true },
+          "createdAt": { "type": "string" }
+        }
+      },
+      "InventoryMovementCreate": {
+        "type": "object",
+        "properties": {
+          "batchId": { "type": "string" },
+          "itemId": { "type": "integer" },
+          "movementDate": { "type": "string" },
+          "movementType": { "type": "string" },
+          "quantity": { "type": "number" },
+          "unitCost": { "type": "number" },
+          "amount": { "type": "number" },
+          "building": { "type": "string" },
+          "remarks": { "type": "string" },
+          "createLedger": { "type": "boolean" },
+          "fundingNature": { "type": "string" },
+          "ledgerCategory": { "type": "string" },
+          "paidBy": { "type": "string" },
+          "paidTo": { "type": "string" },
+          "reference": { "type": "string" }
+        },
+        "required": ["itemId", "movementDate", "movementType", "quantity"]
+      },
+      "Employee": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "displayName": { "type": "string" },
+          "phone": { "type": "string", "nullable": true },
+          "email": { "type": "string", "nullable": true },
+          "address": { "type": "string", "nullable": true },
+          "position": { "type": "string" },
+          "hireDate": { "type": "string" },
+          "assignedBuilding": { "type": "string" },
+          "notes": { "type": "string" },
+          "isActive": { "type": "boolean" }
+        }
+      },
+      "EmployeeCreate": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "displayName": { "type": "string" },
+          "phone": { "type": "string" },
+          "email": { "type": "string" },
+          "address": { "type": "string" },
+          "position": { "type": "string" },
+          "hireDate": { "type": "string" },
+          "assignedBuilding": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "required": ["name"]
+      },
+      "EmployeeCompensation": {
+        "type": "object",
+        "properties": {
+          "employeeId": { "type": "integer" },
+          "employeeName": { "type": "string" },
+          "assignedBuilding": { "type": "string" },
+          "batchId": { "type": "string", "nullable": true },
+          "handledBirds": { "type": "integer" },
+          "ratePerBird": { "type": "number" },
+          "corpoGroup": { "type": "string", "nullable": true },
+          "remarks": { "type": "string", "nullable": true }
+        }
+      },
+      "EmployeeCompensationUpdate": {
+        "type": "object",
+        "properties": {
+          "handledBirds": { "type": "integer" },
+          "ratePerBird": { "type": "number" },
+          "corpoGroup": { "type": "string" },
+          "remarks": { "type": "string" }
+        }
+      },
+      "EmployeePayRow": {
+        "type": "object",
+        "properties": {
+          "employeeId": { "type": "integer" },
+          "employeeName": { "type": "string" },
+          "assignedBuilding": { "type": "string" },
+          "corpoGroup": { "type": "string", "nullable": true },
+          "grossHandledBirds": { "type": "integer" },
+          "mortality": { "type": "integer" },
+          "netHandledBirds": { "type": "integer" },
+          "ratePerBird": { "type": "number" },
+          "payableBirds": { "type": "integer" },
+          "cycleIncome": { "type": "number" },
+          "laborPaid": { "type": "number" },
+          "outstandingAdvance": { "type": "number" },
+          "remainingCyclePay": { "type": "number" },
+          "netPayable": { "type": "number" },
+          "remarks": { "type": "string" }
+        }
+      },
+      "DailyLog": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "batchId": { "type": "string" },
+          "date": { "type": "string" },
+          "building": { "type": "string" },
+          "employeeId": { "type": "integer" },
+          "employeeName": { "type": "string" },
+          "handledBirds": { "type": "integer" },
+          "feedItemId": { "type": "integer" },
+          "feedItemName": { "type": "string" },
+          "feed": { "type": "number" },
+          "mortality": { "type": "integer" },
+          "averageWeightGrams": { "type": "number", "nullable": true },
+          "remarks": { "type": "string" }
+        }
+      },
+      "DailyLogCreate": {
+        "type": "object",
+        "properties": {
+          "batchId": { "type": "string" },
+          "date": { "type": "string" },
+          "building": { "type": "string" },
+          "employeeId": { "type": "integer" },
+          "handledBirds": { "type": "integer" },
+          "feedItemId": { "type": "integer" },
+          "feed": { "type": "number" },
+          "mortality": { "type": "integer" },
+          "averageWeightGrams": { "type": "number" },
+          "remarks": { "type": "string" }
+        },
+        "required": ["date", "building", "employeeId"]
+      },
+      "Transaction": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "batchId": { "type": "string", "nullable": true },
+          "date": { "type": "string" },
+          "building": { "type": "string" },
+          "fundingNature": { "type": "string", "enum": ["OPEX", "CAPEX", "Revenue", "Investment", "Draw"] },
+          "category": { "type": "string" },
+          "categoryId": { "type": "integer" },
+          "description": { "type": "string" },
+          "quantity": { "type": "number", "nullable": true },
+          "unitCost": { "type": "number", "nullable": true },
+          "amount": { "type": "number" },
+          "paidBy": { "type": "integer", "nullable": true },
+          "paidByName": { "type": "string" },
+          "paidTo": { "type": "integer", "nullable": true },
+          "paidToName": { "type": "string" },
+          "reference": { "type": "string" },
+          "remarks": { "type": "string", "nullable": true },
+          "isVoid": { "type": "boolean" },
+          "createdAt": { "type": "string" }
+        }
+      },
+      "TransactionCreate": {
+        "type": "object",
+        "properties": {
+          "batchId": { "type": "string" },
+          "date": { "type": "string" },
+          "building": { "type": "string" },
+          "fundingNature": { "type": "string" },
+          "category": { "type": "string" },
+          "description": { "type": "string" },
+          "quantity": { "type": "number" },
+          "unitCost": { "type": "number" },
+          "amount": { "type": "number" },
+          "paidBy": { "type": "string" },
+          "paidTo": { "type": "string" },
+          "reference": { "type": "string" },
+          "remarks": { "type": "string" },
+          "type": { "type": "string" },
+          "feedItemId": { "type": "integer" }
+        },
+        "required": ["date", "fundingNature", "category", "description"]
+      },
+      "AuditLog": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "action": { "type": "string" },
+          "entityType": { "type": "string" },
+          "entityId": { "type": "string" },
+          "beforeData": { "type": "object", "nullable": true },
+          "afterData": { "type": "object", "nullable": true },
+          "userId": { "type": "integer" },
+          "userEmail": { "type": "string" },
+          "createdAt": { "type": "string" }
+        }
+      },
+      "HarvestReport": {
+        "type": "object",
+        "properties": {
+          "docAddOnRatePerBird": { "type": "number", "example": 0.5 },
+          "truckingFeePerBird": { "type": "number", "example": 1.2 },
+          "sourceFilename": { "type": "string", "nullable": true },
+          "notes": { "type": "string", "nullable": true },
+          "chickenSales": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer" },
+                "item": { "type": "string" },
+                "basePricePerKg": { "type": "number" },
+                "harvest1Birds": { "type": "integer" },
+                "harvest1Kilos": { "type": "number" },
+                "harvest2Birds": { "type": "integer" },
+                "harvest2Kilos": { "type": "number" },
+                "harvest3Birds": { "type": "integer" },
+                "harvest3Kilos": { "type": "number" },
+                "finalRate": { "type": "number", "nullable": true },
+                "notes": { "type": "string" }
+              }
+            }
+          },
+          "byproductSales": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer" },
+                "item": { "type": "string" },
+                "originalRate": { "type": "number" },
+                "harvest1Qty": { "type": "number" },
+                "harvest1Sales": { "type": "number" },
+                "harvest2Qty": { "type": "number" },
+                "harvest2Sales": { "type": "number" },
+                "harvest3Qty": { "type": "number" },
+                "harvest3Sales": { "type": "number" },
+                "finalRate": { "type": "number", "nullable": true },
+                "notes": { "type": "string" }
+              }
+            }
+          },
+          "harvestEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer" },
+                "harvestOrder": { "type": "integer" },
+                "harvestDate": { "type": "string" },
+                "permitShipping": { "type": "number" },
+                "tollingFee": { "type": "number" },
+                "remarks": { "type": "string" }
+              }
+            }
+          },
+          "financingItems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer" },
+                "item": { "type": "string" },
+                "category": { "type": "string" },
+                "quantity": { "type": "number" },
+                "unitCost": { "type": "number" },
+                "amount": { "type": "number" },
+                "notes": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
