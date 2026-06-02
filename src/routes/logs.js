@@ -456,17 +456,20 @@ router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) 
 
   try {
     await client.query('BEGIN');
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
     const before = await client.query(
       `SELECT
          dl.*,
          b.name AS building,
          COALESCE(s.display_name, s.name) AS employee_name
        FROM daily_logs dl
+       JOIN batches ba ON ba.id = dl.batch_id
        LEFT JOIN buildings b ON b.id = dl.building_id
        LEFT JOIN stakeholders s ON s.id = dl.employee_id
        WHERE dl.id = $1
+         AND ba.farm_id = $2
        FOR UPDATE OF dl`,
-      [req.params.id]
+      [req.params.id, farmId]
     );
 
     if (before.rowCount === 0) {

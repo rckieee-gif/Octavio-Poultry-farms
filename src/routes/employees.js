@@ -290,6 +290,10 @@ router.delete('/:id', authenticate, requirePrimaryOwner, async (req, res, next) 
 router.get('/batches/:batchId/employee-compensations', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
+    const batchCheck = await pool.query('SELECT id FROM batches WHERE id = $1 AND farm_id = $2', [req.params.batchId, farmId]);
+    if (batchCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
     const result = await pool.query(
       `SELECT
          s.id AS "employeeId",
@@ -544,6 +548,10 @@ router.put('/batches/:batchId/employee-compensations/:employeeId', authenticate,
 router.get('/batches/:batchId/employee-assignments', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
+    const batchCheck = await pool.query('SELECT id FROM batches WHERE id = $1 AND farm_id = $2', [req.params.batchId, farmId]);
+    if (batchCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'Batch not found' });
+    }
     const result = await pool.query(
       `SELECT
          s.id AS "employeeId",

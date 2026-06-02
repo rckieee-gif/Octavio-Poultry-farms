@@ -165,7 +165,12 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
     return null;
   }
 
-  const before = await client.query('SELECT id FROM batches WHERE id = $1', [batchId]);
+  const before = await client.query('SELECT id, farm_id FROM batches WHERE id = $1', [batchId]);
+  if (before.rowCount > 0 && before.rows[0].farm_id !== farmId) {
+    stats.skipped += 1;
+    addImportWarning(stats, `Skipped batch ${batchId}: ID is already taken by another farm.`);
+    return null;
+  }
 
   await client.query(
     `INSERT INTO batches

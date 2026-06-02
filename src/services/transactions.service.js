@@ -88,21 +88,24 @@ async function voidTransaction(req, res, next, transactionId, batchId = null) {
   try {
     await client.query('BEGIN');
 
-    const params = [transactionId];
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+    const queryParams = [transactionId, farmId];
     let batchClause = '';
 
     if (batchId) {
-      params.push(batchId);
-      batchClause = `AND batch_id = $${params.length}`;
+      queryParams.push(batchId);
+      batchClause = `AND t.batch_id = $3`;
     }
 
     const before = await client.query(
-      `SELECT *
-       FROM daily_transactions
-       WHERE transaction_id = $1
+      `SELECT t.*
+       FROM daily_transactions t
+       JOIN batches b ON b.id = t.batch_id
+       WHERE t.transaction_id = $1
+         AND b.farm_id = $2
          ${batchClause}
-       FOR UPDATE`,
-      params
+       FOR UPDATE OF t`,
+      queryParams
     );
 
     if (before.rowCount === 0) {
@@ -666,6 +669,16 @@ async function createTransaction(req, res, next, batchIdFromRoute = null) {
     await client.query('BEGIN');
 
     const farmId = req.user.farm_id || await getDefaultFarmId(client);
+
+    const batchCheck = await client.query(
+      'SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1',
+      [batchId, farmId]
+    );
+    if (batchCheck.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Batch not found' });
+    }
+
     const dbFundingNature = normalizeFundingNatureForDb(fundingNature);
     const transactionType = deriveTransactionType(fundingNature, type);
     const buildingRecord = await getBuilding(client, building);
@@ -783,13 +796,17 @@ async function updateTransaction(req, res, next, batchId, transactionId) {
   try {
     await client.query('BEGIN');
 
+    const farmId = req.user.farm_id || await getDefaultFarmId(client);
+
     const before = await client.query(
-      `SELECT *
-       FROM daily_transactions
-       WHERE transaction_id = $1
-         AND batch_id = $2
-       FOR UPDATE`,
-      [transactionId, batchId]
+      `SELECT t.*
+       FROM daily_transactions t
+       JOIN batches b ON b.id = t.batch_id
+       WHERE t.transaction_id = $1
+         AND t.batch_id = $2
+         AND b.farm_id = $3
+       FOR UPDATE OF t`,
+      [transactionId, batchId, farmId]
     );
 
     if (before.rowCount === 0) {
@@ -801,8 +818,6 @@ async function updateTransaction(req, res, next, batchId, transactionId) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'Voided transactions cannot be edited.' });
     }
-
-    const farmId = req.user.farm_id || await getDefaultFarmId(client);
     const dbFundingNature = normalizeFundingNatureForDb(fundingNature);
     const transactionType = deriveTransactionType(fundingNature, type);
     const buildingRecord = await getBuilding(client, building);
