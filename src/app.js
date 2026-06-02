@@ -20,19 +20,32 @@ const openapiSpec = require('./openapi.json');
 const app = express();
 
 // 1. CORS with Restricted Origin Matching
-const allowedOrigins = (process.env.CORS_ORIGINS || '')
+const defaultProductionOrigins = [
+  'https://octavio-farms.vercel.app',
+];
+
+const configuredOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(origin => origin.trim())
   .filter(Boolean);
 
-if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0) {
-  throw new Error('CORS_ORIGINS must be set in production.');
+const allowedOrigins = [
+  ...new Set([
+    ...configuredOrigins,
+    ...(process.env.NODE_ENV === 'production' ? defaultProductionOrigins : []),
+  ]),
+];
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.length === 0) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  return /^https:\/\/octavio-farms-[a-z0-9-]+-rckieee-1438s-projects\.vercel\.app$/i.test(origin);
 }
 
 app.use(cors({
   origin(origin, callback) {
-    // If no allowed origins are defined (e.g. local development), or if the origin matches, permit it.
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
     return callback(new Error('Not allowed by CORS'));
