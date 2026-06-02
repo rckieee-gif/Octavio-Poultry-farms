@@ -120,6 +120,10 @@ const batchSchema = z.object({
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().int("Planned flock must be an integer").nonnegative("Planned flock cannot be negative")
   ),
+  mortalityAllowance: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("Mortality allowance must be an integer").nonnegative("Mortality allowance cannot be negative")
+  ).optional(),
   targetFeedKg: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().finite("Target feed must be finite").nonnegative("Target feed cannot be negative")

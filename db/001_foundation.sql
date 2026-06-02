@@ -43,8 +43,13 @@ ALTER TABLE batches
   ADD COLUMN IF NOT EXISTS farm_id uuid REFERENCES farms(id),
   ADD COLUMN IF NOT EXISTS status_override text,
   ADD COLUMN IF NOT EXISTS closed_at timestamptz,
+  ADD COLUMN IF NOT EXISTS mortality_allowance integer NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS created_by_user_id integer REFERENCES users(id),
   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+ALTER TABLE batches
+  DROP CONSTRAINT IF EXISTS batches_mortality_allowance_nonnegative,
+  ADD CONSTRAINT batches_mortality_allowance_nonnegative CHECK (mortality_allowance >= 0);
 
 CREATE TABLE IF NOT EXISTS categories (
   id serial PRIMARY KEY,

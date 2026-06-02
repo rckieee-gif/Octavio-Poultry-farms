@@ -175,8 +175,8 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
   await client.query(
     `INSERT INTO batches
        (id, farm_id, start_date, target_harvest_date, actual_harvest_end_date, status,
-        total_chicks_loaded, planned_flock, target_feed_kg, notes, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        total_chicks_loaded, planned_flock, mortality_allowance, target_feed_kg, notes, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT (id)
      DO UPDATE SET
        farm_id = EXCLUDED.farm_id,
@@ -186,6 +186,7 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
        status = EXCLUDED.status,
        total_chicks_loaded = EXCLUDED.total_chicks_loaded,
        planned_flock = EXCLUDED.planned_flock,
+       mortality_allowance = EXCLUDED.mortality_allowance,
        target_feed_kg = EXCLUDED.target_feed_kg,
        notes = EXCLUDED.notes,
        updated_at = now()`,
@@ -198,6 +199,7 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
       getImportText(row, 'status') || 'ONGOING',
       Math.round(getImportNumber(row, 'total_chicks_loaded', 'totalChicksLoaded') || 0),
       Math.round(getImportNumber(row, 'planned_flock', 'plannedFlock') || 0),
+      Math.round(getImportNumber(row, 'mortality_allowance', 'mortalityAllowance') || 0),
       getImportNumber(row, 'target_feed_kg', 'targetFeedKg') || 0,
       getImportText(row, 'notes'),
       req.user.id,
@@ -1068,6 +1070,7 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
            status,
            total_chicks_loaded,
            planned_flock,
+           mortality_allowance,
            target_feed_kg,
            notes,
            created_at,

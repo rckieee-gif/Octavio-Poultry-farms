@@ -53,6 +53,7 @@ router.get('/', authenticate, async (req, res, next) => {
         status,
         total_chicks_loaded AS "totalChicksLoaded",
         planned_flock AS "plannedFlock",
+        mortality_allowance AS "mortalityAllowance",
         target_feed_kg AS "targetFeedKg",
         notes
       FROM batches
@@ -79,6 +80,7 @@ router.get('/active', authenticate, async (req, res, next) => {
         status,
         total_chicks_loaded AS "totalChicksLoaded",
         planned_flock AS "plannedFlock",
+        mortality_allowance AS "mortalityAllowance",
         target_feed_kg AS "targetFeedKg",
         notes
       FROM batches
@@ -105,8 +107,10 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     targetHarvestDate,
     totalChicksLoaded,
     plannedFlock,
+    mortalityAllowance,
     targetFeedKg,
     notes,
+    status,
     loadings,
   } = req.body;
 
@@ -129,9 +133,9 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     const result = await client.query(
       `INSERT INTO batches
          (id, farm_id, start_date, target_harvest_date, status, total_chicks_loaded,
-          planned_flock, target_feed_kg, notes, created_by_user_id)
+          planned_flock, mortality_allowance, target_feed_kg, notes, created_by_user_id)
        VALUES
-         ($1, $2, $3, $4, 'ONGOING', $5, $6, $7, $8, $9)
+         ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING
          id,
          start_date AS "startDate",
@@ -140,6 +144,7 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
          status,
          total_chicks_loaded AS "totalChicksLoaded",
          planned_flock AS "plannedFlock",
+         mortality_allowance AS "mortalityAllowance",
          target_feed_kg AS "targetFeedKg",
          notes`,
       [
@@ -147,8 +152,10 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
         farmId,
         startDate,
         targetHarvestDate || null,
+        status || 'ON_THE_WAY',
         lockedTotalChicksLoaded,
         Number(plannedFlock || 0),
+        Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
         notes || '',
         req.user.id,
@@ -187,6 +194,7 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
     targetHarvestDate,
     totalChicksLoaded,
     plannedFlock,
+    mortalityAllowance,
     targetFeedKg,
     notes,
     status,
@@ -217,11 +225,12 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
          target_harvest_date = $2,
          total_chicks_loaded = $3,
          planned_flock = $4,
-         target_feed_kg = $5,
-         notes = $6,
-         status = $7,
+         mortality_allowance = $5,
+         target_feed_kg = $6,
+         notes = $7,
+         status = $8,
          updated_at = now()
-       WHERE id = $8
+       WHERE id = $9
        RETURNING
          id,
          start_date AS "startDate",
@@ -230,6 +239,7 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
          status,
          total_chicks_loaded AS "totalChicksLoaded",
          planned_flock AS "plannedFlock",
+         mortality_allowance AS "mortalityAllowance",
          target_feed_kg AS "targetFeedKg",
          notes`,
       [
@@ -237,6 +247,7 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
         targetHarvestDate || null,
         lockedTotalChicksLoaded,
         Number(plannedFlock || 0),
+        Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
         notes || '',
         status || 'ONGOING',

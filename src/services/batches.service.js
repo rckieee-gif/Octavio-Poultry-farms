@@ -19,6 +19,7 @@ function mapBatch(row) {
     status: row.status,
     totalChicksLoaded: Number(row.totalChicksLoaded ?? row.total_chicks_loaded ?? 0),
     plannedFlock: Number(row.plannedFlock ?? row.planned_flock ?? 0),
+    mortalityAllowance: Number(row.mortalityAllowance ?? row.mortality_allowance ?? 0),
     targetFeedKg: toNumber(row.targetFeedKg ?? row.target_feed_kg ?? 0),
     notes: row.notes || '',
   };
@@ -43,11 +44,15 @@ function mapDailyLog(row) {
 }
 
 function getLoadingsTotal(loadings = []) {
+  return loadings.reduce((sum, item) => sum + Math.round(Number(item.chicksLoaded || item.chicks_loaded || 0)), 0);
+}
+
+function getLoadingShareTotal(loadings = []) {
   return loadings.reduce((sum, item) => sum + toNumber(item.loadingSharePct ?? item.loading_share_pct ?? 0), 0);
 }
 
 function normalizeLoadingsWithLockedShares(loadings = []) {
-  const total = getLoadingsTotal(loadings);
+  const total = getLoadingShareTotal(loadings);
   if (total === 100) return loadings;
   const standardShares = { A: 40, B: 30, C: 30 };
   return loadings.map(item => ({
@@ -200,6 +205,7 @@ async function getCurrentBatchSnapshot() {
        status,
        total_chicks_loaded AS "totalChicksLoaded",
        planned_flock AS "plannedFlock",
+       mortality_allowance AS "mortalityAllowance",
        target_feed_kg AS "targetFeedKg",
        notes
      FROM batches
