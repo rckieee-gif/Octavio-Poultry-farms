@@ -136,6 +136,7 @@ async function resetImportSequence(client, tableName, columnName = 'id') {
   ]);
 
   if (!allowedTables.has(tableName)) return;
+  if (columnName !== 'id') return;
 
   await client.query(
     `SELECT setval(
@@ -218,6 +219,11 @@ async function upsertImportedLoading(client, row, batchId, stats) {
   }
 
   const building = await getBuilding(client, buildingName);
+  if (!building) {
+    stats.skipped += 1;
+    addImportWarning(stats, `Skipped loading row: building "${buildingName}" not found.`);
+    return;
+  }
   const before = await client.query(
     'SELECT id FROM batch_building_loadings WHERE batch_id = $1 AND building_id = $2',
     [batchId, building.id]
@@ -354,8 +360,8 @@ async function upsertImportedEmployee(client, req, farmId, row, stats, employeeI
 
   if (!existing?.rowCount) {
     existing = await client.query(
-      'SELECT id FROM stakeholders WHERE lower(name) = lower($1) LIMIT 1',
-      [name]
+      'SELECT id FROM stakeholders WHERE lower(name) = lower($1) AND farm_id = $2 LIMIT 1',
+      [name, farmId]
     );
   }
 
@@ -622,6 +628,11 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
     }
 
     const building = await getBuilding(client, buildingName);
+    if (!building) {
+      stats.skipped += 1;
+      addImportWarning(stats, `Skipped daily log row: building "${buildingName}" not found.`);
+      continue;
+    }
     const originalEmployeeId = getImportNumber(row, 'employee_id');
     const employeeId = originalEmployeeId && employeeIdMap.has(Number(originalEmployeeId))
       ? employeeIdMap.get(Number(originalEmployeeId))

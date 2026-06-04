@@ -1,7 +1,7 @@
 function toNumber(value) {
   if (value === null || value === undefined) return value;
   const numberValue = Number(value);
-  return Number.isNaN(numberValue) ? value : numberValue;
+  return Number.isNaN(numberValue) ? null : numberValue;
 }
 
 function toFiniteNumber(value, fallback = 0) {

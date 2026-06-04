@@ -439,8 +439,15 @@ router.put('/batches/:batchId/employee-compensations/:employeeId', authenticate,
   const client = await pool.connect();
 
   try {
-    const handledBirds = normalizeHandledBirds(req.body.handledBirds);
-    const ratePerBird = normalizeRatePerBird(req.body.ratePerBird);
+    let handledBirds;
+    let ratePerBird;
+    try {
+      handledBirds = normalizeHandledBirds(req.body.handledBirds);
+      ratePerBird = normalizeRatePerBird(req.body.ratePerBird);
+    } catch (validationErr) {
+      client.release();
+      return res.status(400).json({ error: validationErr.message });
+    }
     const corpoGroup = req.body.corpoGroup?.trim() || null;
     const remarks = req.body.remarks || null;
 

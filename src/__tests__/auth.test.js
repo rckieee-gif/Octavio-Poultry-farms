@@ -62,7 +62,7 @@ test.describe('Authentication API & Middleware', () => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.message, 'Login successful');
-    assert.equal(body.token, undefined);
+    assert.ok(body.token);
     assert.equal(body.user.email, 'test@farm.com');
 
     // Verify token cookie is set

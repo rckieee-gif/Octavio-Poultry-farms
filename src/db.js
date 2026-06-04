@@ -20,8 +20,8 @@ async function ensureStakeholder(client, farmId, name, type = 'Supplier') {
   if (!name) return null;
 
   const existing = await client.query(
-    'SELECT id FROM stakeholders WHERE lower(name) = lower($1) LIMIT 1',
-    [name]
+    'SELECT id FROM stakeholders WHERE lower(name) = lower($1) AND farm_id = $2 LIMIT 1',
+    [name, farmId]
   );
 
   if (existing.rowCount > 0) return existing.rows[0].id;
