@@ -23,6 +23,8 @@ const {
   zeroOutFeedInventory,
   generateBatchId,
   getCurrentBatchSnapshot,
+  getLoadingsDoaTotal,
+  getWeightedArrivalSampleWeight,
 } = require('../services/batches.service');
 
 const {
@@ -52,6 +54,10 @@ router.get('/', authenticate, async (req, res, next) => {
         actual_harvest_end_date AS "actualHarvestEndDate",
         status,
         total_chicks_loaded AS "totalChicksLoaded",
+        actual_chicks_arrived AS "actualChicksArrived",
+        doa_count AS "doaCount",
+        net_chicks_placed AS "netChicksPlaced",
+        arrival_sample_weight_g AS "arrivalSampleWeightGrams",
         planned_flock AS "plannedFlock",
         mortality_allowance AS "mortalityAllowance",
         target_feed_kg AS "targetFeedKg",
@@ -79,6 +85,10 @@ router.get('/active', authenticate, async (req, res, next) => {
         actual_harvest_end_date AS "actualHarvestEndDate",
         status,
         total_chicks_loaded AS "totalChicksLoaded",
+        actual_chicks_arrived AS "actualChicksArrived",
+        doa_count AS "doaCount",
+        net_chicks_placed AS "netChicksPlaced",
+        arrival_sample_weight_g AS "arrivalSampleWeightGrams",
         planned_flock AS "plannedFlock",
         mortality_allowance AS "mortalityAllowance",
         target_feed_kg AS "targetFeedKg",
@@ -106,6 +116,10 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     startDate,
     targetHarvestDate,
     totalChicksLoaded,
+    actualChicksArrived,
+    doaCount,
+    netChicksPlaced,
+    arrivalSampleWeightGrams,
     plannedFlock,
     mortalityAllowance,
     targetFeedKg,
@@ -129,13 +143,27 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     const lockedTotalChicksLoaded = lockedLoadings.length
       ? getLoadingsTotal(lockedLoadings)
       : Number(totalChicksLoaded || 0);
+    const lockedDoaCount = lockedLoadings.length
+      ? getLoadingsDoaTotal(lockedLoadings)
+      : Math.round(Number(doaCount || 0));
+    const lockedNetChicksPlaced = lockedLoadings.length
+      ? Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)
+      : Math.round(Number(netChicksPlaced || Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)));
+    const lockedArrivalSampleWeightGrams = lockedLoadings.length
+      ? getWeightedArrivalSampleWeight(lockedLoadings)
+      : (arrivalSampleWeightGrams == null ? null : Number(arrivalSampleWeightGrams));
+    const hasActualChicksArrivedInput = Object.prototype.hasOwnProperty.call(req.body, 'actualChicksArrived');
+    const lockedActualChicksArrived = hasActualChicksArrivedInput
+      ? Math.round(Number(actualChicksArrived || 0))
+      : 0;
 
     const result = await client.query(
       `INSERT INTO batches
          (id, farm_id, start_date, target_harvest_date, status, total_chicks_loaded,
+          actual_chicks_arrived, doa_count, net_chicks_placed, arrival_sample_weight_g,
           planned_flock, mortality_allowance, target_feed_kg, notes, created_by_user_id)
        VALUES
-         ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING
          id,
          start_date AS "startDate",
@@ -143,6 +171,10 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
          actual_harvest_end_date AS "actualHarvestEndDate",
          status,
          total_chicks_loaded AS "totalChicksLoaded",
+         actual_chicks_arrived AS "actualChicksArrived",
+         doa_count AS "doaCount",
+         net_chicks_placed AS "netChicksPlaced",
+         arrival_sample_weight_g AS "arrivalSampleWeightGrams",
          planned_flock AS "plannedFlock",
          mortality_allowance AS "mortalityAllowance",
          target_feed_kg AS "targetFeedKg",
@@ -154,6 +186,10 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
         targetHarvestDate || null,
         status || 'ON_THE_WAY',
         lockedTotalChicksLoaded,
+        lockedActualChicksArrived,
+        lockedDoaCount,
+        lockedNetChicksPlaced,
+        lockedArrivalSampleWeightGrams,
         Number(plannedFlock || 0),
         Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
@@ -193,6 +229,10 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
     startDate,
     targetHarvestDate,
     totalChicksLoaded,
+    actualChicksArrived,
+    doaCount,
+    netChicksPlaced,
+    arrivalSampleWeightGrams,
     plannedFlock,
     mortalityAllowance,
     targetFeedKg,
@@ -217,6 +257,20 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
     const lockedTotalChicksLoaded = lockedLoadings.length
       ? getLoadingsTotal(lockedLoadings)
       : Number(totalChicksLoaded || 0);
+    const lockedDoaCount = lockedLoadings.length
+      ? getLoadingsDoaTotal(lockedLoadings)
+      : Math.round(Number(doaCount || 0));
+    const lockedNetChicksPlaced = lockedLoadings.length
+      ? Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)
+      : Math.round(Number(netChicksPlaced || Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)));
+    const lockedArrivalSampleWeightGrams = lockedLoadings.length
+      ? getWeightedArrivalSampleWeight(lockedLoadings)
+      : (arrivalSampleWeightGrams == null ? null : Number(arrivalSampleWeightGrams));
+    const hasActualChicksArrivedInput = Object.prototype.hasOwnProperty.call(req.body, 'actualChicksArrived');
+    const existingActualChicksArrived = Number(before.rows[0]?.actual_chicks_arrived ?? before.rows[0]?.actualChicksArrived ?? 0);
+    const lockedActualChicksArrived = hasActualChicksArrivedInput
+      ? Math.round(Number(actualChicksArrived || 0))
+      : existingActualChicksArrived;
 
     const result = await client.query(
       `UPDATE batches
@@ -224,13 +278,17 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
          start_date = $1,
          target_harvest_date = $2,
          total_chicks_loaded = $3,
-         planned_flock = $4,
-         mortality_allowance = $5,
-         target_feed_kg = $6,
-         notes = $7,
-         status = $8,
+         actual_chicks_arrived = $4,
+         doa_count = $5,
+         net_chicks_placed = $6,
+         arrival_sample_weight_g = $7,
+         planned_flock = $8,
+         mortality_allowance = $9,
+         target_feed_kg = $10,
+         notes = $11,
+         status = $12,
          updated_at = now()
-       WHERE id = $9
+       WHERE id = $13
        RETURNING
          id,
          start_date AS "startDate",
@@ -238,6 +296,10 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
          actual_harvest_end_date AS "actualHarvestEndDate",
          status,
          total_chicks_loaded AS "totalChicksLoaded",
+         actual_chicks_arrived AS "actualChicksArrived",
+         doa_count AS "doaCount",
+         net_chicks_placed AS "netChicksPlaced",
+         arrival_sample_weight_g AS "arrivalSampleWeightGrams",
          planned_flock AS "plannedFlock",
          mortality_allowance AS "mortalityAllowance",
          target_feed_kg AS "targetFeedKg",
@@ -246,6 +308,10 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
         startDate,
         targetHarvestDate || null,
         lockedTotalChicksLoaded,
+        lockedActualChicksArrived,
+        lockedDoaCount,
+        lockedNetChicksPlaced,
+        lockedArrivalSampleWeightGrams,
         Number(plannedFlock || 0),
         Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
@@ -320,6 +386,9 @@ router.get('/:batchId/loadings', authenticate, async (req, res, next) => {
          b.name AS building,
          bbl.loading_date AS "loadingDate",
          bbl.chicks_loaded AS "chicksLoaded",
+         bbl.doa_count AS "doaCount",
+         bbl.net_chicks_placed AS "netChicksPlaced",
+         bbl.sample_weight_g AS "sampleWeightGrams",
          bbl.loading_share_pct AS "loadingSharePct",
          bbl.remarks
        FROM batch_building_loadings bbl
@@ -334,6 +403,9 @@ router.get('/:batchId/loadings', authenticate, async (req, res, next) => {
       ...row,
       loadingDate: toDateOnly(row.loadingDate),
       chicksLoaded: Number(row.chicksLoaded || 0),
+      doaCount: Number(row.doaCount || 0),
+      netChicksPlaced: Number(row.netChicksPlaced || 0),
+      sampleWeightGrams: row.sampleWeightGrams == null ? null : toNumber(row.sampleWeightGrams),
       loadingSharePct: toNumber(row.loadingSharePct),
     })));
   } catch (err) {
@@ -369,12 +441,27 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(bat
     }
     const lockedLoadings = normalizeLoadingsWithLockedShares(req.body.loadings || []);
     const lockedTotalChicksLoaded = getLoadingsTotal(lockedLoadings);
+    const lockedDoaCount = getLoadingsDoaTotal(lockedLoadings);
+    const lockedNetChicksPlaced = Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0);
+    const lockedArrivalSampleWeightGrams = getWeightedArrivalSampleWeight(lockedLoadings);
     const loadingDate = toDateOnly(batch.rows[0].start_date);
 
     await upsertLoadings(client, req.params.batchId, loadingDate, lockedLoadings);
     await client.query(
-      'UPDATE batches SET total_chicks_loaded = $1, updated_at = now() WHERE id = $2',
-      [lockedTotalChicksLoaded, req.params.batchId]
+      `UPDATE batches
+       SET total_chicks_loaded = $1,
+           doa_count = $2,
+           net_chicks_placed = $3,
+           arrival_sample_weight_g = $4,
+           updated_at = now()
+       WHERE id = $5`,
+      [
+        lockedTotalChicksLoaded,
+        lockedDoaCount,
+        lockedNetChicksPlaced,
+        lockedArrivalSampleWeightGrams,
+        req.params.batchId
+      ]
     );
     await syncBatchChickInventory(client, req, {
       farmId,

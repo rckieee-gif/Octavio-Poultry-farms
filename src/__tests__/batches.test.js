@@ -9,6 +9,7 @@ process.env.NODE_ENV = 'test';
 
 const app = require('../app');
 const { JWT_SIGNING_SECRET } = require('../middleware/auth');
+const { mapBatch } = require('../services/batches.service');
 
 test.describe('Batches API', () => {
   let server;
@@ -32,6 +33,10 @@ test.describe('Batches API', () => {
     actual_harvest_end_date: null,
     status: 'ONGOING',
     total_chicks_loaded: 5000,
+    actual_chicks_arrived: 5000,
+    doa_count: 25,
+    net_chicks_placed: 4975,
+    arrival_sample_weight_g: 42.5,
     planned_flock: 5000,
     target_feed_kg: 7500,
     notes: 'Test batch details',
@@ -65,6 +70,10 @@ test.describe('Batches API', () => {
     assert.equal(body.id, 'batch-2026-06');
     assert.equal(body.status, 'ONGOING');
     assert.equal(body.totalChicksLoaded, 5000);
+    assert.equal(body.actualChicksArrived, 5000);
+    assert.equal(body.doaCount, 25);
+    assert.equal(body.netChicksPlaced, 4975);
+    assert.equal(body.arrivalSampleWeightGrams, 42.5);
   });
 
   test.it('should return 404 from active batch endpoint if no batch is active', async () => {
@@ -77,6 +86,19 @@ test.describe('Batches API', () => {
     assert.equal(response.status, 404);
   });
 
+  test.it('should not infer arrived DOC from planned or loaded chick totals', () => {
+    const mapped = mapBatch({
+      id: 'batch-planned-only',
+      start_date: '2026-06-01',
+      status: 'ONGOING',
+      total_chicks_loaded: 45000,
+      planned_flock: 45000,
+    });
+
+    assert.equal(mapped.totalChicksLoaded, 45000);
+    assert.equal(mapped.actualChicksArrived, 0);
+  });
+
   test.it('should fetch loadings list for a batch', async () => {
     const mockLoadings = [
       {
@@ -84,6 +106,9 @@ test.describe('Batches API', () => {
         building: 'Building 1',
         loadingDate: '2026-06-01',
         chicksLoaded: 3000,
+        doaCount: 15,
+        netChicksPlaced: 2985,
+        sampleWeightGrams: 42,
         loadingSharePct: 60.00,
         remarks: ''
       },
@@ -92,6 +117,9 @@ test.describe('Batches API', () => {
         building: 'Building 2',
         loadingDate: '2026-06-01',
         chicksLoaded: 2000,
+        doaCount: 10,
+        netChicksPlaced: 1990,
+        sampleWeightGrams: 41,
         loadingSharePct: 40.00,
         remarks: ''
       }
@@ -108,6 +136,9 @@ test.describe('Batches API', () => {
     assert.equal(body.length, 2);
     assert.equal(body[0].building, 'Building 1');
     assert.equal(body[0].chicksLoaded, 3000);
+    assert.equal(body[0].doaCount, 15);
+    assert.equal(body[0].netChicksPlaced, 2985);
+    assert.equal(body[0].sampleWeightGrams, 42);
   });
 
   test.it('should update loadings list for a batch', async () => {

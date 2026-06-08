@@ -10,6 +10,8 @@ const {
 const { getHarvestProductionSummary } = require('./harvest.service');
 
 function mapBatch(row) {
+  const arrivalSampleWeightGrams = row.arrivalSampleWeightGrams ?? row.arrival_sample_weight_g;
+
   return {
     id: row.id,
     batchCode: row.id,
@@ -18,6 +20,10 @@ function mapBatch(row) {
     actualHarvestEndDate: toDateOnly(row.actualHarvestEndDate || row.actual_harvest_end_date),
     status: row.status,
     totalChicksLoaded: Number(row.totalChicksLoaded ?? row.total_chicks_loaded ?? 0),
+    actualChicksArrived: Number(row.actualChicksArrived ?? row.actual_chicks_arrived ?? 0),
+    doaCount: Number(row.doaCount ?? row.doa_count ?? 0),
+    netChicksPlaced: Number(row.netChicksPlaced ?? row.net_chicks_placed ?? 0),
+    arrivalSampleWeightGrams: arrivalSampleWeightGrams == null ? null : toNumber(arrivalSampleWeightGrams),
     plannedFlock: Number(row.plannedFlock ?? row.planned_flock ?? 0),
     mortalityAllowance: Number(row.mortalityAllowance ?? row.mortality_allowance ?? 0),
     targetFeedKg: toNumber(row.targetFeedKg ?? row.target_feed_kg ?? 0),
@@ -51,6 +57,25 @@ function getLoadingShareTotal(loadings = []) {
   return loadings.reduce((sum, item) => sum + toNumber(item.loadingSharePct ?? item.loading_share_pct ?? 0), 0);
 }
 
+function getLoadingsDoaTotal(loadings = []) {
+  return loadings.reduce((sum, item) => sum + Math.round(Number(item.doaCount || item.doa_count || 0)), 0);
+}
+
+function getWeightedArrivalSampleWeight(loadings = []) {
+  const sampledRows = loadings
+    .map(item => ({
+      chicksLoaded: Math.round(Number(item.chicksLoaded || item.chicks_loaded || 0)),
+      sampleWeightGrams: toNumber(item.sampleWeightGrams ?? item.sample_weight_g ?? 0),
+    }))
+    .filter(item => item.chicksLoaded > 0 && item.sampleWeightGrams > 0);
+
+  const sampledHeads = sampledRows.reduce((sum, item) => sum + item.chicksLoaded, 0);
+  if (!sampledHeads) return null;
+
+  const weightedTotal = sampledRows.reduce((sum, item) => sum + (item.chicksLoaded * item.sampleWeightGrams), 0);
+  return Number((weightedTotal / sampledHeads).toFixed(2));
+}
+
 function normalizeLoadingsWithLockedShares(loadings = []) {
   const total = getLoadingShareTotal(loadings);
   if (total === 100) return loadings;
@@ -67,12 +92,15 @@ async function upsertLoadings(client, batchId, startDate, loadings = []) {
     if (!building) continue;
     await client.query(
       `INSERT INTO batch_building_loadings
-         (batch_id, building_id, loading_date, chicks_loaded, loading_share_pct, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (batch_id, building_id, loading_date, chicks_loaded, doa_count, net_chicks_placed, sample_weight_g, loading_share_pct, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (batch_id, building_id)
        DO UPDATE SET
          loading_date = EXCLUDED.loading_date,
          chicks_loaded = EXCLUDED.chicks_loaded,
+         doa_count = EXCLUDED.doa_count,
+         net_chicks_placed = EXCLUDED.net_chicks_placed,
+         sample_weight_g = EXCLUDED.sample_weight_g,
          loading_share_pct = EXCLUDED.loading_share_pct,
          remarks = EXCLUDED.remarks,
          updated_at = now()`,
@@ -81,6 +109,13 @@ async function upsertLoadings(client, batchId, startDate, loadings = []) {
         building.id,
         startDate,
         Math.round(Number(loading.chicksLoaded || loading.chicks_loaded || 0)),
+        Math.round(Number(loading.doaCount || loading.doa_count || 0)),
+        Math.max(Math.round(Number(loading.netChicksPlaced || loading.net_chicks_placed || (
+          Number(loading.chicksLoaded || loading.chicks_loaded || 0) - Number(loading.doaCount || loading.doa_count || 0)
+        ) || 0)), 0),
+        loading.sampleWeightGrams === null || loading.sampleWeightGrams === undefined || loading.sampleWeightGrams === ''
+          ? null
+          : toNumber(loading.sampleWeightGrams ?? loading.sample_weight_g),
         toNumber(loading.loadingSharePct ?? loading.loading_share_pct ?? 0),
         loading.remarks || null,
       ]
@@ -204,6 +239,10 @@ async function getCurrentBatchSnapshot() {
        actual_harvest_end_date AS "actualHarvestEndDate",
        status,
        total_chicks_loaded AS "totalChicksLoaded",
+       actual_chicks_arrived AS "actualChicksArrived",
+       doa_count AS "doaCount",
+       net_chicks_placed AS "netChicksPlaced",
+       arrival_sample_weight_g AS "arrivalSampleWeightGrams",
        planned_flock AS "plannedFlock",
        mortality_allowance AS "mortalityAllowance",
        target_feed_kg AS "targetFeedKg",
@@ -248,6 +287,9 @@ async function getCurrentBatchSnapshot() {
          b.name AS building,
          bbl.loading_date AS "loadingDate",
          bbl.chicks_loaded AS "chicksLoaded",
+         bbl.doa_count AS "doaCount",
+         bbl.net_chicks_placed AS "netChicksPlaced",
+         bbl.sample_weight_g AS "sampleWeightGrams",
          bbl.loading_share_pct AS "loadingSharePct",
          bbl.remarks
        FROM batch_building_loadings bbl
@@ -351,6 +393,9 @@ async function getCurrentBatchSnapshot() {
       ...row,
       loadingDate: toDateOnly(row.loadingDate),
       chicksLoaded: Number(row.chicksLoaded || 0),
+      doaCount: Number(row.doaCount || 0),
+      netChicksPlaced: Number(row.netChicksPlaced || 0),
+      sampleWeightGrams: row.sampleWeightGrams == null ? null : toNumber(row.sampleWeightGrams),
       loadingSharePct: toNumber(row.loadingSharePct),
     })),
     assignments: assignmentResult.rows.map((row) => ({
@@ -373,6 +418,8 @@ module.exports = {
   mapBatch,
   mapDailyLog,
   getLoadingsTotal,
+  getLoadingsDoaTotal,
+  getWeightedArrivalSampleWeight,
   normalizeLoadingsWithLockedShares,
   upsertLoadings,
   createDefaultLoadings,

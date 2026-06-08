@@ -1886,6 +1886,10 @@
           "actualHarvestEndDate": { "type": "string", "nullable": true, "example": null },
           "status": { "type": "string", "enum": ["Active", "Completed"], "example": "Active" },
           "totalChicksLoaded": { "type": "integer", "example": 25000 },
+          "actualChicksArrived": { "type": "integer", "example": 25000 },
+          "doaCount": { "type": "integer", "example": 42 },
+          "netChicksPlaced": { "type": "integer", "example": 24958 },
+          "arrivalSampleWeightGrams": { "type": "number", "nullable": true, "example": 42.5 },
           "plannedFlock": { "type": "integer", "example": 25000 },
           "targetFeedKg": { "type": "number", "example": 50000 },
           "notes": { "type": "string", "example": "Initial setup notes." }
@@ -1897,6 +1901,10 @@
           "startDate": { "type": "string", "example": "2026-04-18" },
           "targetHarvestDate": { "type": "string", "nullable": true, "example": "2026-05-28" },
           "totalChicksLoaded": { "type": "integer", "example": 25000 },
+          "actualChicksArrived": { "type": "integer", "example": 25000 },
+          "doaCount": { "type": "integer", "example": 42 },
+          "netChicksPlaced": { "type": "integer", "example": 24958 },
+          "arrivalSampleWeightGrams": { "type": "number", "nullable": true, "example": 42.5 },
           "plannedFlock": { "type": "integer", "example": 25000 },
           "targetFeedKg": { "type": "number", "example": 50000 },
           "notes": { "type": "string", "nullable": true },
@@ -1914,6 +1922,9 @@
           "building": { "type": "string", "example": "A" },
           "buildingName": { "type": "string", "example": "A" },
           "chicksLoaded": { "type": "integer", "example": 10000 },
+          "doaCount": { "type": "integer", "example": 12 },
+          "netChicksPlaced": { "type": "integer", "example": 9988 },
+          "sampleWeightGrams": { "type": "number", "nullable": true, "example": 42.5 },
           "loadingSharePct": { "type": "number", "example": 40 },
           "remarks": { "type": "string", "nullable": true }
         }

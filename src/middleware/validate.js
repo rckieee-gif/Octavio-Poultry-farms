@@ -97,6 +97,18 @@ const loadingItemSchema = z.object({
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().int("Chicks loaded must be an integer").nonnegative("Chicks loaded cannot be negative")
   ).optional(),
+  doaCount: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("DOA count must be an integer").nonnegative("DOA count cannot be negative")
+  ).optional(),
+  netChicksPlaced: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("Net chicks placed must be an integer").nonnegative("Net chicks placed cannot be negative")
+  ).optional(),
+  sampleWeightGrams: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? null : Number(val)),
+    z.number().finite("Sample weight must be finite").positive("Sample weight must be greater than zero").nullable()
+  ).optional(),
   loadingSharePct: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().finite("Share percentage must be finite").nonnegative("Share percentage cannot be negative").max(100, "Share percentage cannot exceed 100")
@@ -116,6 +128,22 @@ const batchSchema = z.object({
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().int("Total chicks loaded must be an integer").nonnegative("Total chicks loaded cannot be negative")
   ),
+  actualChicksArrived: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("Actual chicks arrived must be an integer").nonnegative("Actual chicks arrived cannot be negative")
+  ).optional(),
+  doaCount: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("DOA count must be an integer").nonnegative("DOA count cannot be negative")
+  ).optional(),
+  netChicksPlaced: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
+    z.number().int("Net chicks placed must be an integer").nonnegative("Net chicks placed cannot be negative")
+  ).optional(),
+  arrivalSampleWeightGrams: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? null : Number(val)),
+    z.number().finite("Arrival sample weight must be finite").positive("Arrival sample weight must be greater than zero").nullable()
+  ).optional(),
   plannedFlock: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? 0 : Number(val)),
     z.number().int("Planned flock must be an integer").nonnegative("Planned flock cannot be negative")

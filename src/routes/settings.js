@@ -176,8 +176,9 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
   await client.query(
     `INSERT INTO batches
        (id, farm_id, start_date, target_harvest_date, actual_harvest_end_date, status,
-        total_chicks_loaded, planned_flock, mortality_allowance, target_feed_kg, notes, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        total_chicks_loaded, actual_chicks_arrived, doa_count, net_chicks_placed, arrival_sample_weight_g,
+        planned_flock, mortality_allowance, target_feed_kg, notes, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      ON CONFLICT (id)
      DO UPDATE SET
        farm_id = EXCLUDED.farm_id,
@@ -186,6 +187,10 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
        actual_harvest_end_date = EXCLUDED.actual_harvest_end_date,
        status = EXCLUDED.status,
        total_chicks_loaded = EXCLUDED.total_chicks_loaded,
+       actual_chicks_arrived = EXCLUDED.actual_chicks_arrived,
+       doa_count = EXCLUDED.doa_count,
+       net_chicks_placed = EXCLUDED.net_chicks_placed,
+       arrival_sample_weight_g = EXCLUDED.arrival_sample_weight_g,
        planned_flock = EXCLUDED.planned_flock,
        mortality_allowance = EXCLUDED.mortality_allowance,
        target_feed_kg = EXCLUDED.target_feed_kg,
@@ -199,6 +204,10 @@ async function upsertImportedBatch(client, req, farmId, row, stats) {
       getImportDate(row, 'actual_harvest_end_date', 'actualHarvestEndDate'),
       getImportText(row, 'status') || 'ONGOING',
       Math.round(getImportNumber(row, 'total_chicks_loaded', 'totalChicksLoaded') || 0),
+      Math.round(getImportNumber(row, 'actual_chicks_arrived', 'actualChicksArrived', 'arrivedDocCount') || 0),
+      Math.round(getImportNumber(row, 'doa_count', 'doaCount') || 0),
+      Math.round(getImportNumber(row, 'net_chicks_placed', 'netChicksPlaced') || 0),
+      getImportNumber(row, 'arrival_sample_weight_g', 'arrivalSampleWeightGrams'),
       Math.round(getImportNumber(row, 'planned_flock', 'plannedFlock') || 0),
       Math.round(getImportNumber(row, 'mortality_allowance', 'mortalityAllowance') || 0),
       getImportNumber(row, 'target_feed_kg', 'targetFeedKg') || 0,
@@ -231,12 +240,15 @@ async function upsertImportedLoading(client, row, batchId, stats) {
 
   await client.query(
     `INSERT INTO batch_building_loadings
-       (batch_id, building_id, loading_date, chicks_loaded, loading_share_pct, remarks)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (batch_id, building_id, loading_date, chicks_loaded, doa_count, net_chicks_placed, sample_weight_g, loading_share_pct, remarks)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (batch_id, building_id)
      DO UPDATE SET
        loading_date = EXCLUDED.loading_date,
        chicks_loaded = EXCLUDED.chicks_loaded,
+       doa_count = EXCLUDED.doa_count,
+       net_chicks_placed = EXCLUDED.net_chicks_placed,
+       sample_weight_g = EXCLUDED.sample_weight_g,
        loading_share_pct = EXCLUDED.loading_share_pct,
        remarks = EXCLUDED.remarks`,
     [
@@ -244,6 +256,9 @@ async function upsertImportedLoading(client, row, batchId, stats) {
       building.id,
       getImportDate(row, 'loading_date', 'loadingDate') || new Date().toISOString().slice(0, 10),
       Math.round(getImportNumber(row, 'chicks_loaded', 'chicksLoaded') || 0),
+      Math.round(getImportNumber(row, 'doa_count', 'doaCount') || 0),
+      Math.round(getImportNumber(row, 'net_chicks_placed', 'netChicksPlaced') || 0),
+      getImportNumber(row, 'sample_weight_g', 'sampleWeightGrams', 'arrivalSampleWeightGrams'),
       getImportNumber(row, 'loading_share_pct', 'loadingSharePct'),
       getImportText(row, 'remarks'),
     ]
@@ -1080,6 +1095,10 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
            actual_harvest_end_date,
            status,
            total_chicks_loaded,
+           actual_chicks_arrived,
+           doa_count,
+           net_chicks_placed,
+           arrival_sample_weight_g,
            planned_flock,
            mortality_allowance,
            target_feed_kg,
