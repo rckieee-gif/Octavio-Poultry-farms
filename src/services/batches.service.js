@@ -158,10 +158,23 @@ async function syncBatchChickInventory(client, req, {
   farmId,
   batchId,
   startDate,
-  totalChicksLoaded,
+  actualChicksArrived,
 }) {
   const chicksItem = await getInventoryItemByName(client, farmId, 'DOC Chicks');
   if (!chicksItem) return;
+
+  await client.query(
+    `DELETE FROM inventory_movements
+     WHERE farm_id = $1
+       AND batch_id = $2
+       AND item_id = $3
+       AND source_type IN ('batch_loading', 'batch_loading_chicks')
+       AND source_id = $2`,
+    [farmId, batchId, chicksItem.id]
+  );
+
+  const arrivalQuantity = Math.round(Number(actualChicksArrived || 0));
+  if (arrivalQuantity <= 0) return;
 
   await insertInventoryMovement(client, req, {
     farmId,
@@ -169,11 +182,11 @@ async function syncBatchChickInventory(client, req, {
     itemId: chicksItem.id,
     movementDate: startDate,
     movementType: 'Stock In',
-    quantity: totalChicksLoaded,
+    quantity: arrivalQuantity,
     building: 'All',
     sourceType: 'batch_loading',
     sourceId: batchId,
-    remarks: `Initial chicks loaded for batch ${batchId}`,
+    remarks: `Arrived DOC recorded for batch ${batchId}`,
   });
 }
 

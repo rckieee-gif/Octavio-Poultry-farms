@@ -9,4 +9,4 @@ SET actual_chicks_arrived = COALESCE(
 )
 WHERE b.actual_chicks_arrived = 0
   AND b.total_chicks_loaded > 0
-  AND UPPER(REPLACE(COALESCE(b.status, ''), ' ', '_')) NOT IN ('ON_THE_WAY', 'INCOMING');
+  AND UPPER(REPLACE(COALESCE(b.status, ''), ' ', '_')) IN ('CLOSED', 'HARVESTED', 'POSTED');

@@ -146,9 +146,6 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     const lockedDoaCount = lockedLoadings.length
       ? getLoadingsDoaTotal(lockedLoadings)
       : Math.round(Number(doaCount || 0));
-    const lockedNetChicksPlaced = lockedLoadings.length
-      ? Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)
-      : Math.round(Number(netChicksPlaced || Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)));
     const lockedArrivalSampleWeightGrams = lockedLoadings.length
       ? getWeightedArrivalSampleWeight(lockedLoadings)
       : (arrivalSampleWeightGrams == null ? null : Number(arrivalSampleWeightGrams));
@@ -156,6 +153,13 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
     const lockedActualChicksArrived = hasActualChicksArrivedInput
       ? Math.round(Number(actualChicksArrived || 0))
       : 0;
+    const confirmedDoaCount = lockedActualChicksArrived > 0 ? lockedDoaCount : 0;
+    const confirmedNetChicksPlaced = lockedActualChicksArrived > 0
+      ? Math.max(lockedActualChicksArrived - confirmedDoaCount, 0)
+      : 0;
+    const confirmedArrivalSampleWeightGrams = lockedActualChicksArrived > 0
+      ? lockedArrivalSampleWeightGrams
+      : null;
 
     const result = await client.query(
       `INSERT INTO batches
@@ -187,9 +191,9 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
         status || 'ON_THE_WAY',
         lockedTotalChicksLoaded,
         lockedActualChicksArrived,
-        lockedDoaCount,
-        lockedNetChicksPlaced,
-        lockedArrivalSampleWeightGrams,
+        confirmedDoaCount,
+        confirmedNetChicksPlaced,
+        confirmedArrivalSampleWeightGrams,
         Number(plannedFlock || 0),
         Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
@@ -207,7 +211,7 @@ router.post('/', authenticate, requireMinimumRole('OperationManager'), validate(
       farmId,
       batchId,
       startDate,
-      totalChicksLoaded: lockedTotalChicksLoaded,
+      actualChicksArrived: lockedActualChicksArrived,
     });
 
     await auditLog(client, req, 'create', 'batch', batchId, null, result.rows[0], batchId);
@@ -260,9 +264,6 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
     const lockedDoaCount = lockedLoadings.length
       ? getLoadingsDoaTotal(lockedLoadings)
       : Math.round(Number(doaCount || 0));
-    const lockedNetChicksPlaced = lockedLoadings.length
-      ? Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)
-      : Math.round(Number(netChicksPlaced || Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0)));
     const lockedArrivalSampleWeightGrams = lockedLoadings.length
       ? getWeightedArrivalSampleWeight(lockedLoadings)
       : (arrivalSampleWeightGrams == null ? null : Number(arrivalSampleWeightGrams));
@@ -271,6 +272,13 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
     const lockedActualChicksArrived = hasActualChicksArrivedInput
       ? Math.round(Number(actualChicksArrived || 0))
       : existingActualChicksArrived;
+    const confirmedDoaCount = lockedActualChicksArrived > 0 ? lockedDoaCount : 0;
+    const confirmedNetChicksPlaced = lockedActualChicksArrived > 0
+      ? Math.max(lockedActualChicksArrived - confirmedDoaCount, 0)
+      : 0;
+    const confirmedArrivalSampleWeightGrams = lockedActualChicksArrived > 0
+      ? lockedArrivalSampleWeightGrams
+      : null;
 
     const result = await client.query(
       `UPDATE batches
@@ -309,9 +317,9 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
         targetHarvestDate || null,
         lockedTotalChicksLoaded,
         lockedActualChicksArrived,
-        lockedDoaCount,
-        lockedNetChicksPlaced,
-        lockedArrivalSampleWeightGrams,
+        confirmedDoaCount,
+        confirmedNetChicksPlaced,
+        confirmedArrivalSampleWeightGrams,
         Number(plannedFlock || 0),
         Math.round(Number(mortalityAllowance || 0)),
         Number(targetFeedKg || 0),
@@ -328,7 +336,7 @@ router.patch('/:id', authenticate, requirePrimaryOwner, validate(batchSchema), a
       farmId,
       batchId: id,
       startDate,
-      totalChicksLoaded: lockedTotalChicksLoaded,
+      actualChicksArrived: lockedActualChicksArrived,
     });
 
     await auditLog(client, req, 'update', 'batch', id, before.rows[0], result.rows[0], id);
@@ -434,7 +442,10 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(bat
   try {
     await client.query('BEGIN');
     const farmId = req.user.farm_id || await getDefaultFarmId(client);
-    const batch = await client.query('SELECT start_date FROM batches WHERE id = $1 AND farm_id = $2', [req.params.batchId, farmId]);
+    const batch = await client.query(
+      'SELECT start_date, actual_chicks_arrived FROM batches WHERE id = $1 AND farm_id = $2',
+      [req.params.batchId, farmId]
+    );
     if (batch.rowCount === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Batch not found' });
@@ -442,9 +453,14 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(bat
     const lockedLoadings = normalizeLoadingsWithLockedShares(req.body.loadings || []);
     const lockedTotalChicksLoaded = getLoadingsTotal(lockedLoadings);
     const lockedDoaCount = getLoadingsDoaTotal(lockedLoadings);
-    const lockedNetChicksPlaced = Math.max(lockedTotalChicksLoaded - lockedDoaCount, 0);
     const lockedArrivalSampleWeightGrams = getWeightedArrivalSampleWeight(lockedLoadings);
     const loadingDate = toDateOnly(batch.rows[0].start_date);
+    const actualChicksArrived = Math.round(Number(batch.rows[0].actual_chicks_arrived || 0));
+    const confirmedDoaCount = actualChicksArrived > 0 ? lockedDoaCount : 0;
+    const confirmedNetChicksPlaced = actualChicksArrived > 0
+      ? Math.max(actualChicksArrived - confirmedDoaCount, 0)
+      : 0;
+    const confirmedSampleWeightGrams = actualChicksArrived > 0 ? lockedArrivalSampleWeightGrams : null;
 
     await upsertLoadings(client, req.params.batchId, loadingDate, lockedLoadings);
     await client.query(
@@ -457,9 +473,9 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(bat
        WHERE id = $5`,
       [
         lockedTotalChicksLoaded,
-        lockedDoaCount,
-        lockedNetChicksPlaced,
-        lockedArrivalSampleWeightGrams,
+        confirmedDoaCount,
+        confirmedNetChicksPlaced,
+        confirmedSampleWeightGrams,
         req.params.batchId
       ]
     );
@@ -467,7 +483,7 @@ router.put('/:batchId/loadings', authenticate, requirePrimaryOwner, validate(bat
       farmId,
       batchId: req.params.batchId,
       startDate: loadingDate,
-      totalChicksLoaded: lockedTotalChicksLoaded,
+      actualChicksArrived,
     });
     await auditLog(client, req, 'update', 'batch_building_loadings', req.params.batchId, null, req.body, req.params.batchId);
     await client.query('COMMIT');

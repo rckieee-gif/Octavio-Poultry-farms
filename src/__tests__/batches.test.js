@@ -9,7 +9,7 @@ process.env.NODE_ENV = 'test';
 
 const app = require('../app');
 const { JWT_SIGNING_SECRET } = require('../middleware/auth');
-const { mapBatch } = require('../services/batches.service');
+const { mapBatch, syncBatchChickInventory } = require('../services/batches.service');
 
 test.describe('Batches API', () => {
   let server;
@@ -97,6 +97,40 @@ test.describe('Batches API', () => {
 
     assert.equal(mapped.totalChicksLoaded, 45000);
     assert.equal(mapped.actualChicksArrived, 0);
+  });
+
+  test.it('should not stock planned DOC before arrival confirmation', async () => {
+    let deletedMovements = 0;
+    let insertedMovements = 0;
+    mockQuery('FROM inventory_items', [{ id: 9, name: 'DOC Chicks', category: 'Chicks' }]);
+    mockQuery('DELETE FROM inventory_movements', () => {
+      deletedMovements += 1;
+      return { rows: [], rowCount: 1 };
+    });
+    mockQuery('INSERT INTO inventory_movements', () => {
+      insertedMovements += 1;
+      return { rows: [{ id: 99 }], rowCount: 1 };
+    });
+
+    await syncBatchChickInventory({ query: require('../db').pool.query }, { user: mockUser, headers: {} }, {
+      farmId: mockUser.farm_id,
+      batchId: 'planned-only',
+      startDate: '2026-06-21',
+      actualChicksArrived: 0,
+    });
+
+    assert.equal(deletedMovements, 1);
+    assert.equal(insertedMovements, 0);
+
+    await syncBatchChickInventory({ query: require('../db').pool.query }, { user: mockUser, headers: {} }, {
+      farmId: mockUser.farm_id,
+      batchId: 'confirmed-arrival',
+      startDate: '2026-06-21',
+      actualChicksArrived: 4980,
+    });
+
+    assert.equal(deletedMovements, 2);
+    assert.equal(insertedMovements, 1);
   });
 
   test.it('should fetch loadings list for a batch', async () => {
