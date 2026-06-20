@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const jwt = require('jsonwebtoken');
 const { mockQuery, clearMocks } = require('./dbMock');
 
@@ -131,6 +133,16 @@ test.describe('Batches API', () => {
 
     assert.equal(deletedMovements, 2);
     assert.equal(insertedMovements, 1);
+  });
+
+  test.it('should migrate the loading timestamp used by arrived DOC upserts', () => {
+    const migration = fs.readFileSync(
+      path.join(__dirname, '../../db/018_add_loading_updated_at.sql'),
+      'utf8'
+    );
+
+    assert.match(migration, /ALTER TABLE batch_building_loadings/i);
+    assert.match(migration, /ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now\(\)/i);
   });
 
   test.it('should fetch loadings list for a batch', async () => {
