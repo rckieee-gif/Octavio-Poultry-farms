@@ -38,6 +38,7 @@ function mapEmployeeCompensation(row) {
     assignedBuilding: metadata.assignedBuilding || '',
     batchId: row.batchId || null,
     handledBirds: Number(row.handledBirds || 0),
+    buildingChicksLoaded: Number(row.buildingChicksLoaded ?? row.building_chicks_loaded ?? 0),
     ratePerBird: Number(row.ratePerBird || 1.5),
     corpoGroup: row.corpoGroup || '',
     remarks: row.remarks || '',
@@ -64,7 +65,9 @@ function buildEmployeePaySummaryRows(compensationRows, transactionRows, dailyLog
   const loadingMap = new Map();
   batchLoadingRows.forEach((row) => {
     const key = String(row.building || '').toUpperCase();
-    if (key) loadingMap.set(key, Number(row.chicksLoaded || row.chicks_loaded || 0));
+    if (key) {
+      loadingMap.set(key, Number(row.buildingChicksLoaded ?? row.building_chicks_loaded ?? row.chicksLoaded ?? row.chicks_loaded ?? 0));
+    }
   });
 
   const buildingHandledTotals = new Map();

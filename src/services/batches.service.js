@@ -317,7 +317,10 @@ async function getCurrentBatchSnapshot() {
          COALESCE(s.display_name, s.name) AS "employeeName",
          COALESCE(s.metadata->>'assignedBuilding', '') AS "assignedBuilding",
          COALESCE(ebc.handled_birds, 0) AS "handledBirds",
-         COALESCE(bbl.chicks_loaded, 0) AS "buildingChicksLoaded"
+         CASE
+           WHEN $3::integer > 0 THEN COALESCE(bbl.net_chicks_placed, 0)
+           ELSE 0
+         END AS "buildingChicksLoaded"
        FROM stakeholders s
        LEFT JOIN employee_batch_compensations ebc
          ON ebc.employee_id = s.id
@@ -338,7 +341,7 @@ async function getCurrentBatchSnapshot() {
              AND u.role = 'Viewer'
          )
        ORDER BY COALESCE(s.metadata->>'assignedBuilding', ''), COALESCE(s.display_name, s.name)`,
-      [farmId, batch.id]
+      [farmId, batch.id, batch.actualChicksArrived]
     ),
     pool.query(
       `SELECT

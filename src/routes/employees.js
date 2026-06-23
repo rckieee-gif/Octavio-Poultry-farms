@@ -398,8 +398,12 @@ router.get('/batches/:batchId/employee-pay-summary', authenticate, requireMinimu
       pool.query(
         `SELECT
            b.name AS building,
-           bbl.chicks_loaded AS "chicksLoaded"
+           CASE
+             WHEN ba.actual_chicks_arrived > 0 THEN COALESCE(bbl.net_chicks_placed, 0)
+             ELSE 0
+           END AS "buildingChicksLoaded"
          FROM batch_building_loadings bbl
+         JOIN batches ba ON ba.id = bbl.batch_id
          JOIN buildings b ON b.id = bbl.building_id
          WHERE bbl.batch_id = $1`,
         [req.params.batchId]
@@ -565,13 +569,25 @@ router.get('/batches/:batchId/employee-assignments', authenticate, async (req, r
          COALESCE(s.display_name, s.name) AS "employeeName",
          s.metadata,
          COALESCE(ebc.handled_birds, 0) AS "handledBirds",
+         CASE
+           WHEN ba.actual_chicks_arrived > 0 THEN COALESCE(bbl.net_chicks_placed, 0)
+           ELSE 0
+         END AS "buildingChicksLoaded",
          COALESCE(ebc.rate_per_bird, 1.5) AS "ratePerBird",
          ebc.corpo_group AS "corpoGroup",
          ebc.remarks
        FROM stakeholders s
+       JOIN batches ba
+         ON ba.id = $2
+        AND ba.farm_id = $1
        LEFT JOIN employee_batch_compensations ebc
          ON ebc.employee_id = s.id
         AND ebc.batch_id = $2
+       LEFT JOIN buildings b
+         ON b.name = COALESCE(s.metadata->>'assignedBuilding', '')
+       LEFT JOIN batch_building_loadings bbl
+         ON bbl.batch_id = $2
+        AND bbl.building_id = b.id
        WHERE s.farm_id = $1
          AND s.type = 'Employee'
          AND s.is_active = true

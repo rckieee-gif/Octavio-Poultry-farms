@@ -121,4 +121,62 @@ test.describe('Farm Scoping & Data Isolation', () => {
 
     assert.equal(response.status, 404);
   });
+
+  test.it('should keep building chicks at zero for employee assignments before arrived DOC is confirmed', async () => {
+    mockQuery('FROM batches WHERE id = $1 AND farm_id = $2', [{ id: '20260604-02' }]);
+    mockQuery('FROM users', (sql) => {
+      if (!sql.includes('FROM stakeholders s')) return { rows: [mockUser], rowCount: 1 };
+      assert.match(sql, /ba\.actual_chicks_arrived > 0/i);
+      assert.match(sql, /bbl\.net_chicks_placed/i);
+      assert.doesNotMatch(sql, /bbl\.chicks_loaded,\s*0\)\s+AS "buildingChicksLoaded"/i);
+      return { rows: [{
+        employeeId: 20,
+        employeeName: 'Worker Rolly',
+        metadata: { assignedBuilding: 'A' },
+        handledBirds: 0,
+        buildingChicksLoaded: 0,
+        ratePerBird: 1.5,
+        corpoGroup: '',
+        remarks: '',
+      }], rowCount: 1 };
+    });
+
+    const response = await fetch(`${apiBase}/api/batches/20260604-02/employee-assignments`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body[0].assignedBuilding, 'A');
+    assert.equal(body[0].buildingChicksLoaded, 0);
+  });
+
+  test.it('should expose net placed building chicks after arrived DOC is confirmed', async () => {
+    mockQuery('FROM batches WHERE id = $1 AND farm_id = $2', [{ id: '20260621-01' }]);
+    mockQuery('FROM users', (sql) => {
+      if (!sql.includes('FROM stakeholders s')) return { rows: [mockUser], rowCount: 1 };
+      assert.match(sql, /ba\.actual_chicks_arrived > 0/i);
+      assert.match(sql, /bbl\.net_chicks_placed/i);
+      return { rows: [{
+        employeeId: 21,
+        employeeName: 'Worker Leah',
+        metadata: { assignedBuilding: 'B' },
+        handledBirds: 7900,
+        buildingChicksLoaded: 7985,
+        ratePerBird: 1.5,
+        corpoGroup: '',
+        remarks: '',
+      }], rowCount: 1 };
+    });
+
+    const response = await fetch(`${apiBase}/api/batches/20260621-01/employee-assignments`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body[0].assignedBuilding, 'B');
+    assert.equal(body[0].handledBirds, 7900);
+    assert.equal(body[0].buildingChicksLoaded, 7985);
+  });
 });
