@@ -87,6 +87,24 @@ test.describe('Inventory API', () => {
     assert.equal(body[0].currentStock, 50);
   });
 
+  test.it('should scope item stock to the requested batch', async () => {
+    let capturedSql = '';
+    let capturedParams = [];
+    mockQuery('FROM inventory_items ii', (sql, params) => {
+      capturedSql = sql;
+      capturedParams = params;
+      return { rows: [mockItemRow], rowCount: 1 };
+    });
+
+    const response = await fetch(`${apiBase}/api/inventory/items?batchId=batch-2026-06`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(capturedSql, /im\.batch_id = \$2/);
+    assert.deepEqual(capturedParams, ['farm-uuid-abc', 'batch-2026-06']);
+  });
+
   test.it('should create a new inventory item', async () => {
     mockQuery('INSERT INTO inventory_items', [mockItemRow]);
 

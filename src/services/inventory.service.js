@@ -132,13 +132,19 @@ async function insertInventoryMovement(client, req, {
 
 const { pool } = require('../db');
 
-async function getInventoryItems(farmId, category = null) {
+async function getInventoryItems(farmId, category = null, batchId = null) {
   const params = [farmId];
   const where = ['ii.farm_id = $1', 'ii.is_active = true'];
+  let movementJoin = 'LEFT JOIN inventory_movements im ON im.item_id = ii.id AND im.farm_id = ii.farm_id';
 
   if (category) {
     params.push(category);
     where.push(`ii.category = $${params.length}`);
+  }
+
+  if (batchId) {
+    params.push(batchId);
+    movementJoin += ` AND im.batch_id = $${params.length}`;
   }
 
   const result = await pool.query(
@@ -159,7 +165,7 @@ async function getInventoryItems(farmId, category = null) {
          END
        ), 0) AS "currentStock"
      FROM inventory_items ii
-     LEFT JOIN inventory_movements im ON im.item_id = ii.id
+     ${movementJoin}
      WHERE ${where.join(' AND ')}
      GROUP BY ii.id
      ORDER BY

@@ -17,7 +17,7 @@ const router = express.Router();
 router.get('/items', authenticate, async (req, res, next) => {
   try {
     const farmId = req.user.farm_id || await getDefaultFarmId();
-    res.json(await getInventoryItems(farmId, req.query.category || null));
+    res.json(await getInventoryItems(farmId, req.query.category || null, req.query.batchId || null));
   } catch (err) {
     next(err);
   }
