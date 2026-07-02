@@ -896,7 +896,7 @@ async function importBatchArchive(client, req, farmId, archive) {
 }
 
 router.post('/import', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
-  const { importType, content, filename } = req.body || {};
+  const { importType, content, filename, dryRun } = req.body || {};
 
   if (!importType || !content) {
     return res.status(400).json({ error: 'Import type and file content are required.' });
@@ -928,6 +928,19 @@ router.post('/import', authenticate, requireMinimumRole('OperationManager'), asy
       } else {
         throw new Error('Unknown import type.');
       }
+    }
+
+    if (dryRun) {
+      await client.query('ROLLBACK').catch(() => {});
+      const rows = importType === 'batch_archive' ? [] : parseCsvRows(content);
+      return res.json({
+        message: 'Dry-run complete.',
+        importType,
+        filename: filename || '',
+        summary,
+        previewRows: rows.slice(0, 10),
+        isDryRun: true
+      });
     }
 
     await auditLog(client, req, 'import', 'settings_file', filename || importType, null, { importType, summary });
