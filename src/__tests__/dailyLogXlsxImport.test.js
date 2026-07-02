@@ -95,6 +95,17 @@ test.describe('daily log XLSX import parser', () => {
     assert.match(migration, /ADD COLUMN IF NOT EXISTS import_source_key text/i);
     assert.match(migration, /daily_logs_batch_import_source_key/i);
   });
+
+  test.it('ships the daily log inventory movement reconciliation migration', () => {
+    const migration = fs.readFileSync(
+      path.join(__dirname, '../../db/020_reconcile_daily_log_import_movements.sql'),
+      'utf8'
+    );
+
+    assert.match(migration, /daily_log_feed/i);
+    assert.match(migration, /daily_log_mortality/i);
+    assert.match(migration, /Starter Feed/i);
+  });
 });
 
 test.describe('daily log XLSX import route', () => {
