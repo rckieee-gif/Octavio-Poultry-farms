@@ -7,6 +7,8 @@ const adminRouter = require('./routes/admin');
 const { router: batchesRouter } = require('./routes/batches');
 const { getCurrentBatchSnapshot } = require('./services/batches.service');
 const transactionsRouter = require('./routes/transactions');
+const expensesRouter = require('./routes/expenses');
+const dashboardRouter = require('./routes/dashboard');
 const inventoryRouter = require('./routes/inventory');
 const employeesRouter = require('./routes/employees');
 const logsRouter = require('./routes/logs');
@@ -136,6 +138,8 @@ app.use('/api/inventory', inventoryRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/expenses', expensesRouter);
+app.use('/api/dashboard', dashboardRouter);
 app.use('/api', masterDataRouter);
 
 // Dual mount transactions / employees since they have nested /api/batches/... paths

@@ -38,6 +38,8 @@ function mapTransaction(row) {
     feedItemName: row.feedItemName || row.feed_item_name || '',
     isVoid: Boolean(row.isVoid),
     voidReason: row.voidReason || '',
+    createdAt: row.createdAt || row.created_at,
+    updatedAt: row.updatedAt || row.updated_at,
   };
 }
 
@@ -383,7 +385,9 @@ async function getTransactions(batchId = null, farmId = null) {
        feed_im.item_id AS "feedItemId",
        feed_item.name AS "feedItemName",
        t.is_void AS "isVoid",
-       t.void_reason AS "voidReason"
+       t.void_reason AS "voidReason",
+       t.created_at AS "createdAt",
+       t.updated_at AS "updatedAt"
      FROM daily_transactions t
      JOIN batches ba ON ba.id = t.batch_id
      LEFT JOIN buildings b ON b.id = t.building_id
@@ -426,7 +430,9 @@ async function getTransactionById(transactionId) {
        feed_im.item_id AS "feedItemId",
        feed_item.name AS "feedItemName",
        t.is_void AS "isVoid",
-       t.void_reason AS "voidReason"
+       t.void_reason AS "voidReason",
+       t.created_at AS "createdAt",
+       t.updated_at AS "updatedAt"
      FROM daily_transactions t
      LEFT JOIN buildings b ON b.id = t.building_id
      LEFT JOIN categories c ON c.id = t.category_id

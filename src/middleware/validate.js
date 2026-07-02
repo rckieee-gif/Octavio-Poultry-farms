@@ -347,6 +347,20 @@ const inventoryMovementSchema = z.object({
   reference: z.string().optional().nullable(),
 });
 
+// Schema for friendly expenses API create/update
+const expenseSchema = z.object({
+  batchId: batchIdSchema.optional().nullable(),
+  description: z.string().min(1, "Description is required"),
+  category: z.string().min(1, "Category is required"),
+  vendor: z.string().optional().nullable(),
+  date: z.string().min(1, "Date is required"),
+  amount: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? undefined : Number(val)),
+    z.number().finite("Amount must be finite").positive("Amount must be greater than zero")
+  ),
+  notes: z.string().optional().nullable(),
+});
+
 // Schema for employee create/update
 const employeeSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -383,6 +397,7 @@ module.exports = {
   harvestReportSchema,
   inventoryItemSchema,
   inventoryMovementSchema,
+  expenseSchema,
   employeeSchema,
   employeeCompensationSchema,
 };
