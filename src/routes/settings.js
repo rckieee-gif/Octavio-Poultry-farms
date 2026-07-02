@@ -13,6 +13,8 @@ const {
   normalizeHandledBirds,
   normalizeRatePerBird,
 } = require('../services/payroll.service');
+const { sendDailyLogsCsv } = require('../services/dailyLogExport.service');
+const { parseDailyLogXlsx } = require('../services/dailyLogXlsxImport.service');
 const { toDateOnly, sendCsv } = require('../utils/validation');
 const { calculateAmount } = require('../utils/money');
 
@@ -79,6 +81,30 @@ function parseCsvRows(text) {
     if (header) record[header] = entry[index] === undefined ? '' : entry[index];
     return record;
   }, {}));
+}
+
+function isXlsxFilename(filename) {
+  return /\.xlsx$/i.test(String(filename || ''));
+}
+
+function decodeBase64Content(contentBase64) {
+  const text = String(contentBase64 || '').trim();
+  if (!text) return null;
+  return Buffer.from(text, 'base64');
+}
+
+async function parseImportRows({ importType, content, contentBase64, filename, options }) {
+  if (importType === 'daily_logs' && contentBase64 && isXlsxFilename(filename)) {
+    return parseDailyLogXlsx(decodeBase64Content(contentBase64), {
+      defaultFeedItem: options?.defaultFeedItem,
+    });
+  }
+
+  if (contentBase64) {
+    throw new Error('Excel workbook import is only supported for Daily Logs.');
+  }
+
+  return parseCsvRows(content);
 }
 
 function createImportStats(label) {
@@ -624,6 +650,8 @@ async function importEmployees(client, req, farmId, rows, stats, employeeIdMap =
 }
 
 async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap = new Map(), itemIdMap = new Map()) {
+  const feedItemNameMap = new Map();
+
   for (const row of rows) {
     stats.rowsRead += 1;
     const batchId = getImportText(row, 'batch_id', 'batchId');
@@ -656,13 +684,20 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
     let feedItemId = originalFeedItemId && itemIdMap.has(Number(originalFeedItemId))
       ? itemIdMap.get(Number(originalFeedItemId))
       : null;
+    const feedItemName = getImportText(row, 'feed_item');
 
-    if (!feedItemId && getImportText(row, 'feed_item')) {
-      feedItemId = await upsertImportedInventoryItem(client, farmId, {
-        name: getImportText(row, 'feed_item'),
-        category: 'Feed',
-        unit: 'sacks',
-      }, createImportStats('feed item'), itemIdMap);
+    if (!feedItemId && feedItemName) {
+      const feedItemKey = feedItemName.toLowerCase();
+      if (feedItemNameMap.has(feedItemKey)) {
+        feedItemId = feedItemNameMap.get(feedItemKey);
+      } else {
+        feedItemId = await upsertImportedInventoryItem(client, farmId, {
+          name: feedItemName,
+          category: 'Feed',
+          unit: 'sacks',
+        }, createImportStats('feed item'), itemIdMap);
+        feedItemNameMap.set(feedItemKey, feedItemId);
+      }
     }
 
     if (!employeeId) {
@@ -672,9 +707,15 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
     }
 
     const originalId = getImportNumber(row, 'id');
+    const importSourceKey = getImportText(row, 'import_source_key', 'source_key');
     const existing = originalId
       ? await client.query('SELECT id FROM daily_logs WHERE id = $1', [originalId])
-      : { rowCount: 0 };
+      : importSourceKey
+        ? await client.query(
+          'SELECT id FROM daily_logs WHERE batch_id = $1 AND import_source_key = $2',
+          [batchId, importSourceKey]
+        )
+        : { rowCount: 0 };
     const values = [
       batchId,
       date,
@@ -686,6 +727,7 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
       Math.round(getImportNumber(row, 'mortality') || 0),
       getImportNumber(row, 'average_weight_g', 'averageWeightGrams'),
       getImportText(row, 'remarks') || null,
+      importSourceKey || null,
       req.user.id,
     ];
 
@@ -702,9 +744,10 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
              mortality = $8,
              average_weight_g = $9,
              remarks = $10,
+             import_source_key = $11,
              updated_at = now()
-         WHERE id = $12`,
-        [...values, originalId]
+         WHERE id = $13`,
+        [...values, existing.rows[0].id]
       );
       stats.updated += 1;
       continue;
@@ -714,16 +757,16 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
       await client.query(
         `INSERT INTO daily_logs
            (id, batch_id, date, building_id, employee_id, handled_birds_snapshot,
-            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, created_by_user_id)
-         VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, import_source_key, created_by_user_id)
+         VALUES ($13, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [...values, originalId]
       );
     } else {
       await client.query(
         `INSERT INTO daily_logs
            (batch_id, date, building_id, employee_id, handled_birds_snapshot,
-            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, created_by_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            feed_item_id, feed_consumed, mortality, average_weight_g, remarks, import_source_key, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         values
       );
     }
@@ -896,9 +939,9 @@ async function importBatchArchive(client, req, farmId, archive) {
 }
 
 router.post('/import', authenticate, requireMinimumRole('OperationManager'), async (req, res, next) => {
-  const { importType, content, filename, dryRun } = req.body || {};
+  const { importType, content, contentBase64, filename, dryRun, options } = req.body || {};
 
-  if (!importType || !content) {
+  if (!importType || (!content && !contentBase64)) {
     return res.status(400).json({ error: 'Import type and file content are required.' });
   }
 
@@ -910,11 +953,13 @@ router.post('/import', authenticate, requireMinimumRole('OperationManager'), asy
     const itemIdMap = new Map();
     const employeeIdMap = new Map();
     let summary;
+    let previewRows = [];
 
     if (importType === 'batch_archive') {
       summary = await importBatchArchive(client, req, farmId, JSON.parse(content));
     } else {
-      const rows = parseCsvRows(content);
+      const rows = await parseImportRows({ importType, content, contentBase64, filename, options });
+      previewRows = rows.slice(0, 10);
       summary = { [importType]: createImportStats(importType) };
 
       if (importType === 'transactions') {
@@ -932,13 +977,12 @@ router.post('/import', authenticate, requireMinimumRole('OperationManager'), asy
 
     if (dryRun) {
       await client.query('ROLLBACK').catch(() => {});
-      const rows = importType === 'batch_archive' ? [] : parseCsvRows(content);
       return res.json({
         message: 'Dry-run complete.',
         importType,
         filename: filename || '',
         summary,
-        previewRows: rows.slice(0, 10),
+        previewRows,
         isDryRun: true
       });
     }
@@ -1006,13 +1050,15 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
     }
 
     if (dataset === 'daily_logs') {
+      if (!batchId) {
+        return res.status(400).json({ error: 'Daily log export requires a selected batch.' });
+      }
+
       const params = [farmId];
       const where = ['ba.farm_id = $1'];
 
-      if (batchId) {
-        params.push(batchId);
-        where.push(`dl.batch_id = $${params.length}`);
-      }
+      params.push(batchId);
+      where.push(`dl.batch_id = $${params.length}`);
 
       const result = await pool.query(
         `SELECT
@@ -1034,11 +1080,11 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
          LEFT JOIN stakeholders s ON s.id = dl.employee_id
          LEFT JOIN inventory_items ii ON ii.id = dl.feed_item_id
          WHERE ${where.join(' AND ')}
-         ORDER BY dl.date DESC, dl.id DESC`,
+         ORDER BY dl.id DESC, dl.created_at DESC`,
         params
       );
 
-      return sendCsv(res, `octavio-daily-logs${batchId ? `-${batchId}` : ''}.csv`, result.rows);
+      return sendDailyLogsCsv(res, `octavio-daily-logs-${batchId}.csv`, result.rows);
     }
 
     if (dataset === 'inventory') {

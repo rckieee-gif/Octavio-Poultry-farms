@@ -78,8 +78,8 @@ const limiter = rateLimit({
 });
 app.use('/api', limiter);
 
-// 4. Reduced JSON body limit
-app.use(express.json({ limit: '2mb' }));
+// 4. JSON body limit includes base64 workbook imports for daily logs.
+app.use(express.json({ limit: '8mb' }));
 
 // Idempotency check for queued offline mutations
 app.use('/api', idempotencyMiddleware);

@@ -1634,8 +1634,8 @@
     "/settings/import": {
       "post": {
         "tags": ["Settings & Data Exchange"],
-        "summary": "Import CSV file records",
-        "description": "Bulk inserts transaction and logging tables. Requires role: OperationManager or PrimaryOwner.",
+        "summary": "Import CSV or daily log XLSX records",
+        "description": "Bulk inserts transaction and logging tables. Daily logs also support base64 XLSX workbook imports. Requires role: OperationManager or PrimaryOwner.",
         "responses": {
           "200": { "description": "Import success metadata" }
         }
