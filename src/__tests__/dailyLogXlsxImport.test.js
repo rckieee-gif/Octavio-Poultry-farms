@@ -130,6 +130,11 @@ test.describe('daily log XLSX import route', () => {
     mockQuery("status = 'ONGOING'", [{ id: 'BATCH_ACTIVE' }]);
     mockQuery('SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1', [{ id: 'BATCH_ACTIVE' }]);
     mockQuery('INSERT INTO inventory_items', [{ id: 9 }]);
+    mockQuery('INSERT INTO daily_logs', (() => {
+      let nextId = 101;
+      return () => ({ rows: [{ id: nextId++ }], rowCount: 1 });
+    })());
+    mockQuery('INSERT INTO inventory_movements', [{ id: 501 }]);
 
     const workbookBuffer = await buildDailyLogWorkbookBuffer();
     const response = await fetch(`${apiBase}/api/settings/import`, {
@@ -156,5 +161,66 @@ test.describe('daily log XLSX import route', () => {
     assert.equal(body.previewRows[0].batch_id, 'BATCH_ACTIVE');
     assert.equal(body.previewRows[0].import_source_key, 'poultry-daily-log:2026-06-20:A-01');
     assert.equal(body.previewRows[0].feed_item, 'Grower Feed');
+  });
+
+  test.it('creates linked stock-out movements when committing daily log imports', async () => {
+    const insertedMovements = [];
+
+    mockQuery("status = 'ONGOING'", [{ id: 'BATCH_ACTIVE' }]);
+    mockQuery('SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1', [{ id: 'BATCH_ACTIVE' }]);
+    mockQuery(/inventory_items[\s\S]*lower\(name\)\s*=\s*lower\(\$2\)/i, (sql, params) => {
+      const name = params[1];
+      if (name === 'DOC Chicks') {
+        return { rows: [{ id: 10, name: 'DOC Chicks', category: 'Chicks', unit: 'heads' }], rowCount: 1 };
+      }
+      return { rows: [{ id: 9, name, category: 'Feed', unit: 'sacks' }], rowCount: 1 };
+    });
+    mockQuery('UPDATE inventory_items', []);
+    mockQuery('INSERT INTO inventory_items', [{ id: 9 }]);
+    mockQuery('INSERT INTO daily_logs', (() => {
+      let nextId = 201;
+      return () => ({ rows: [{ id: nextId++ }], rowCount: 1 });
+    })());
+    mockQuery('INSERT INTO inventory_movements', (sql, params) => {
+      insertedMovements.push({
+        batchId: params[1],
+        itemId: params[2],
+        movementDate: params[3],
+        movementType: params[4],
+        quantity: Number(params[5]),
+        sourceType: params[9],
+        sourceId: params[10],
+        remarks: params[12],
+      });
+      return { rows: [{ id: 700 + insertedMovements.length }], rowCount: 1 };
+    });
+
+    const workbookBuffer = await buildDailyLogWorkbookBuffer();
+    const response = await fetch(`${apiBase}/api/settings/import`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        importType: 'daily_logs',
+        filename: 'Poultry_Performance_Monitoring_System_BATCH_20260620.xlsx',
+        contentBase64: workbookBuffer.toString('base64'),
+        options: { defaultFeedItem: 'Starter Feed' },
+        dryRun: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const feedMovements = insertedMovements.filter((movement) => movement.sourceType === 'daily_log_feed');
+    const mortalityMovements = insertedMovements.filter((movement) => movement.sourceType === 'daily_log_mortality');
+
+    assert.equal(feedMovements.length, 2);
+    assert.equal(mortalityMovements.length, 2);
+    assert.deepEqual(feedMovements.map((movement) => movement.quantity), [1.5, 2]);
+    assert.equal(feedMovements[0].itemId, 9);
+    assert.equal(feedMovements[0].movementType, 'Stock Out');
+    assert.equal(feedMovements[0].sourceId, '201');
+    assert.equal(mortalityMovements[0].itemId, 10);
   });
 });

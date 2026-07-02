@@ -15,6 +15,7 @@ const {
 } = require('../services/payroll.service');
 const { sendDailyLogsCsv } = require('../services/dailyLogExport.service');
 const { parseDailyLogXlsx } = require('../services/dailyLogXlsxImport.service');
+const { getInventoryItemByName, insertInventoryMovement } = require('../services/inventory.service');
 const { toDateOnly, sendCsv } = require('../utils/validation');
 const { calculateAmount } = require('../utils/money');
 
@@ -676,6 +677,58 @@ async function importEmployees(client, req, farmId, rows, stats, employeeIdMap =
   await resetImportSequence(client, 'employee_batch_compensations');
 }
 
+async function syncImportedDailyLogInventoryMovements(client, req, farmId, {
+  batchId,
+  dailyLogId,
+  date,
+  buildingName,
+  employeeName,
+  feedItemId,
+  feedQuantity,
+  mortalityQuantity,
+}) {
+  await client.query(
+    `DELETE FROM inventory_movements
+     WHERE source_type IN ('daily_log_feed', 'daily_log_mortality')
+       AND source_id = $1`,
+    [String(dailyLogId)]
+  );
+
+  if (feedItemId && feedQuantity > 0) {
+    await insertInventoryMovement(client, req, {
+      farmId,
+      batchId,
+      itemId: feedItemId,
+      movementDate: date,
+      movementType: 'Stock Out',
+      quantity: feedQuantity,
+      building: buildingName,
+      sourceType: 'daily_log_feed',
+      sourceId: dailyLogId,
+      remarks: `Feed consumed by ${employeeName || 'employee'}`,
+    });
+  }
+
+  if (mortalityQuantity > 0) {
+    const chicksItem = await getInventoryItemByName(client, farmId, 'DOC Chicks');
+
+    if (chicksItem) {
+      await insertInventoryMovement(client, req, {
+        farmId,
+        batchId,
+        itemId: chicksItem.id,
+        movementDate: date,
+        movementType: 'Stock Out',
+        quantity: mortalityQuantity,
+        building: buildingName,
+        sourceType: 'daily_log_mortality',
+        sourceId: dailyLogId,
+        remarks: `Mortality recorded for ${employeeName || 'employee'}`,
+      });
+    }
+  }
+}
+
 async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap = new Map(), itemIdMap = new Map()) {
   const feedItemNameMap = new Map();
 
@@ -712,6 +765,8 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
       ? itemIdMap.get(Number(originalFeedItemId))
       : null;
     const feedItemName = getImportText(row, 'feed_item');
+    const feedQuantity = getImportNumber(row, 'feed_consumed', 'feed') || 0;
+    const mortalityQuantity = Math.round(getImportNumber(row, 'mortality') || 0);
 
     if (!feedItemId && feedItemName) {
       const feedItemKey = feedItemName.toLowerCase();
@@ -725,6 +780,11 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
         }, createImportStats('feed item'), itemIdMap);
         feedItemNameMap.set(feedItemKey, feedItemId);
       }
+    }
+
+    if (!feedItemId && feedQuantity > 0) {
+      const starterFeed = await getInventoryItemByName(client, farmId, 'Starter Feed');
+      feedItemId = starterFeed?.id || null;
     }
 
     if (!employeeId) {
@@ -750,13 +810,14 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
       employeeId,
       Math.round(getImportNumber(row, 'handled_birds_snapshot', 'handledBirds') || 0),
       feedItemId,
-      getImportNumber(row, 'feed_consumed', 'feed') || 0,
-      Math.round(getImportNumber(row, 'mortality') || 0),
+      feedQuantity,
+      mortalityQuantity,
       getImportNumber(row, 'average_weight_g', 'averageWeightGrams'),
       getImportText(row, 'remarks') || null,
       importSourceKey || null,
       req.user.id,
     ];
+    let dailyLogId = null;
 
     if (existing.rowCount > 0) {
       await client.query(
@@ -776,29 +837,42 @@ async function importDailyLogs(client, req, farmId, rows, stats, employeeIdMap =
          WHERE id = $13`,
         [...values, existing.rows[0].id]
       );
+      dailyLogId = existing.rows[0].id;
       stats.updated += 1;
-      continue;
-    }
-
-    if (originalId) {
-      await client.query(
+    } else if (originalId) {
+      const result = await client.query(
         `INSERT INTO daily_logs
            (id, batch_id, date, building_id, employee_id, handled_birds_snapshot,
             feed_item_id, feed_consumed, mortality, average_weight_g, remarks, import_source_key, created_by_user_id)
-         VALUES ($13, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         VALUES ($13, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
         [...values, originalId]
       );
+      dailyLogId = result.rows[0].id;
+      stats.created += 1;
     } else {
-      await client.query(
+      const result = await client.query(
         `INSERT INTO daily_logs
            (batch_id, date, building_id, employee_id, handled_birds_snapshot,
             feed_item_id, feed_consumed, mortality, average_weight_g, remarks, import_source_key, created_by_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
         values
       );
+      dailyLogId = result.rows[0].id;
+      stats.created += 1;
     }
 
-    stats.created += 1;
+    await syncImportedDailyLogInventoryMovements(client, req, farmId, {
+      batchId,
+      dailyLogId,
+      date,
+      buildingName: building.name,
+      employeeName: getImportText(row, 'employee', 'employee_name'),
+      feedItemId,
+      feedQuantity,
+      mortalityQuantity,
+    });
   }
 
   await resetImportSequence(client, 'daily_logs');
