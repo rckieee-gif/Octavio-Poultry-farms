@@ -176,6 +176,7 @@ test.describe('daily log XLSX import route', () => {
 
   test.it('creates linked stock-out movements when committing daily log imports', async () => {
     const insertedMovements = [];
+    const bulkReconcileSql = [];
 
     mockQuery("status = 'ONGOING'", [{ id: 'BATCH_ACTIVE' }]);
     mockQuery('SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1', [{ id: 'BATCH_ACTIVE' }]);
@@ -193,6 +194,11 @@ test.describe('daily log XLSX import route', () => {
       return () => ({ rows: [{ id: nextId++ }], rowCount: 1 });
     })());
     mockQuery('INSERT INTO inventory_movements', (sql, params) => {
+      if (/FROM\s+daily_logs\s+dl/i.test(sql)) {
+        bulkReconcileSql.push(sql);
+        return { rows: [], rowCount: 0 };
+      }
+
       insertedMovements.push({
         batchId: params[1],
         itemId: params[2],
@@ -233,5 +239,8 @@ test.describe('daily log XLSX import route', () => {
     assert.equal(feedMovements[0].movementType, 'Stock Out');
     assert.equal(feedMovements[0].sourceId, '201');
     assert.equal(mortalityMovements[0].itemId, 10);
+    assert.equal(bulkReconcileSql.length, 2);
+    assert.match(bulkReconcileSql[0], /daily_log_feed/i);
+    assert.match(bulkReconcileSql[1], /daily_log_mortality/i);
   });
 });
