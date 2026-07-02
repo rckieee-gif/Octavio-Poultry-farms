@@ -102,6 +102,9 @@ test.describe('Inventory API', () => {
 
     assert.equal(response.status, 200);
     assert.match(capturedSql, /im\.batch_id = \$2/);
+    assert.match(capturedSql, /untracked_daily_log_usage/);
+    assert.match(capturedSql, /daily_log_feed/);
+    assert.match(capturedSql, /daily_log_mortality/);
     assert.deepEqual(capturedParams, ['farm-uuid-abc', 'batch-2026-06']);
   });
 

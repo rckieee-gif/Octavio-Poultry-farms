@@ -136,6 +136,7 @@ async function getInventoryItems(farmId, category = null, batchId = null) {
   const params = [farmId];
   const where = ['ii.farm_id = $1', 'ii.is_active = true'];
   let movementJoin = 'LEFT JOIN inventory_movements im ON im.item_id = ii.id AND im.farm_id = ii.farm_id';
+  let dailyLogBatchFilter = '';
 
   if (category) {
     params.push(category);
@@ -144,11 +145,57 @@ async function getInventoryItems(farmId, category = null, batchId = null) {
 
   if (batchId) {
     params.push(batchId);
-    movementJoin += ` AND im.batch_id = $${params.length}`;
+    const batchParam = `$${params.length}`;
+    movementJoin += ` AND im.batch_id = ${batchParam}`;
+    dailyLogBatchFilter = `AND dl.batch_id = ${batchParam}`;
   }
 
   const result = await pool.query(
-    `SELECT
+    `WITH untracked_daily_log_usage AS (
+       SELECT usage.item_id, SUM(usage.quantity) AS quantity
+       FROM (
+         SELECT
+           COALESCE(dl.feed_item_id, starter_feed.id) AS item_id,
+           dl.feed_consumed AS quantity
+         FROM daily_logs dl
+         JOIN batches b ON b.id = dl.batch_id
+         LEFT JOIN inventory_items starter_feed
+           ON starter_feed.farm_id = b.farm_id
+          AND lower(starter_feed.name) = lower('Starter Feed')
+         WHERE b.farm_id = $1
+           ${dailyLogBatchFilter}
+           AND dl.feed_consumed > 0
+           AND COALESCE(dl.feed_item_id, starter_feed.id) IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM inventory_movements existing
+             WHERE existing.source_type = 'daily_log_feed'
+               AND existing.source_id = dl.id::text
+               AND existing.item_id = COALESCE(dl.feed_item_id, starter_feed.id)
+           )
+         UNION ALL
+         SELECT
+           doc_chicks.id AS item_id,
+           dl.mortality AS quantity
+         FROM daily_logs dl
+         JOIN batches b ON b.id = dl.batch_id
+         JOIN inventory_items doc_chicks
+           ON doc_chicks.farm_id = b.farm_id
+          AND lower(doc_chicks.name) = lower('DOC Chicks')
+         WHERE b.farm_id = $1
+           ${dailyLogBatchFilter}
+           AND dl.mortality > 0
+           AND NOT EXISTS (
+             SELECT 1
+             FROM inventory_movements existing
+             WHERE existing.source_type = 'daily_log_mortality'
+               AND existing.source_id = dl.id::text
+               AND existing.item_id = doc_chicks.id
+           )
+       ) usage
+       GROUP BY usage.item_id
+     )
+     SELECT
        ii.id,
        ii.name,
        ii.category,
@@ -156,18 +203,22 @@ async function getInventoryItems(farmId, category = null, batchId = null) {
        ii.target_quantity AS "targetQuantity",
        ii.reorder_level AS "reorderLevel",
        ii.is_active AS "isActive",
-       COALESCE(SUM(
+       (
+         COALESCE(SUM(
          CASE
            WHEN im.movement_type = 'Stock In' THEN im.quantity
            WHEN im.movement_type = 'Stock Out' THEN -im.quantity
            WHEN im.movement_type = 'Adjustment' THEN im.quantity
            ELSE 0
          END
-       ), 0) AS "currentStock"
+         ), 0)
+         - COALESCE(untracked_daily_log_usage.quantity, 0)
+       ) AS "currentStock"
      FROM inventory_items ii
      ${movementJoin}
+     LEFT JOIN untracked_daily_log_usage ON untracked_daily_log_usage.item_id = ii.id
      WHERE ${where.join(' AND ')}
-     GROUP BY ii.id
+     GROUP BY ii.id, untracked_daily_log_usage.quantity
      ORDER BY
        CASE ii.category
          WHEN 'Feed' THEN 1
