@@ -93,15 +93,42 @@ function decodeBase64Content(contentBase64) {
   return Buffer.from(text, 'base64');
 }
 
-async function parseImportRows({ importType, content, contentBase64, filename, options }) {
+function createImportError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+async function getActiveBatchId(client, farmId) {
+  const result = await client.query(
+    `SELECT id
+       FROM batches
+      WHERE farm_id = $1
+        AND status = 'ONGOING'
+      ORDER BY start_date DESC
+      LIMIT 1`,
+    [farmId]
+  );
+
+  return result.rows[0]?.id || null;
+}
+
+async function parseImportRows({ client, farmId, importType, content, contentBase64, filename, options }) {
   if (importType === 'daily_logs' && contentBase64 && isXlsxFilename(filename)) {
+    const activeBatchId = await getActiveBatchId(client, farmId);
+
+    if (!activeBatchId) {
+      throw createImportError('Daily log workbook import requires an active batch. Create or activate a batch, then import again.');
+    }
+
     return parseDailyLogXlsx(decodeBase64Content(contentBase64), {
+      batchId: activeBatchId,
       defaultFeedItem: options?.defaultFeedItem,
     });
   }
 
   if (contentBase64) {
-    throw new Error('Excel workbook import is only supported for Daily Logs.');
+    throw createImportError('Excel workbook import is only supported for Daily Logs.');
   }
 
   return parseCsvRows(content);
@@ -958,7 +985,7 @@ router.post('/import', authenticate, requireMinimumRole('OperationManager'), asy
     if (importType === 'batch_archive') {
       summary = await importBatchArchive(client, req, farmId, JSON.parse(content));
     } else {
-      const rows = await parseImportRows({ importType, content, contentBase64, filename, options });
+      const rows = await parseImportRows({ client, farmId, importType, content, contentBase64, filename, options });
       previewRows = rows.slice(0, 10);
       summary = { [importType]: createImportStats(importType) };
 

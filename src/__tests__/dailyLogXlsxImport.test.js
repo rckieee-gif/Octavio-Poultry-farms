@@ -65,12 +65,13 @@ async function buildDailyLogWorkbookBuffer() {
 test.describe('daily log XLSX import parser', () => {
   test.it('maps the poultry monitoring workbook to daily log import rows', async () => {
     const rows = await parseDailyLogXlsx(await buildDailyLogWorkbookBuffer(), {
+      batchId: 'BATCH_ACTIVE',
       defaultFeedItem: 'Grower Feed',
     });
 
     assert.equal(rows.length, 2);
     assert.deepEqual(rows[0], {
-      batch_id: 'BATCH_20260620',
+      batch_id: 'BATCH_ACTIVE',
       date: '2026-06-20',
       building: 'A',
       employee: 'Ianrey',
@@ -126,7 +127,8 @@ test.describe('daily log XLSX import route', () => {
   });
 
   test.it('dry-runs daily log XLSX uploads through the settings importer', async () => {
-    mockQuery('SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1', [{ id: 'BATCH_20260620' }]);
+    mockQuery("status = 'ONGOING'", [{ id: 'BATCH_ACTIVE' }]);
+    mockQuery('SELECT id FROM batches WHERE id = $1 AND farm_id = $2 LIMIT 1', [{ id: 'BATCH_ACTIVE' }]);
     mockQuery('INSERT INTO inventory_items', [{ id: 9 }]);
 
     const workbookBuffer = await buildDailyLogWorkbookBuffer();
@@ -150,6 +152,8 @@ test.describe('daily log XLSX import route', () => {
     assert.equal(body.isDryRun, true);
     assert.equal(body.summary.daily_logs.rowsRead, 2);
     assert.equal(body.summary.daily_logs.created, 2);
+    assert.equal(body.summary.daily_logs.warnings.length, 0);
+    assert.equal(body.previewRows[0].batch_id, 'BATCH_ACTIVE');
     assert.equal(body.previewRows[0].import_source_key, 'poultry-daily-log:2026-06-20:A-01');
     assert.equal(body.previewRows[0].feed_item, 'Grower Feed');
   });
