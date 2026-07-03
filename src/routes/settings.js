@@ -1315,6 +1315,7 @@ router.get('/export', authenticate, requireMinimumRole('OperationManager'), asyn
         `SELECT
            dl.id,
            dl.batch_id,
+           ba.start_date AS batch_start_date,
            dl.date,
            COALESCE(b.name, 'All') AS building,
            COALESCE(s.display_name, s.name) AS employee,

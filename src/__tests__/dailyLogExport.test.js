@@ -15,7 +15,7 @@ process.env.NODE_ENV = 'test';
 const app = require('../app');
 const { JWT_SIGNING_SECRET } = require('../middleware/auth');
 
-const HEADER = 'id,batch_id,date,building,employee,handled_birds_snapshot,feed_item,feed_consumed,mortality,average_weight_g,remarks,created_at';
+const HEADER = 'id,batch_id,date,building,employee,handled_birds_snapshot,feed_item,feed_consumed,mortality,average_weight_g,estimated_weight_g,actual_fcr,estimated_fcr,remarks,created_at';
 
 test.describe('Daily log CSV export formatting', () => {
   test.it('builds the exact daily log CSV shape with UTC dates and newest id first', () => {
@@ -55,11 +55,11 @@ test.describe('Daily log CSV export formatting', () => {
     assert.equal(lines[0], HEADER);
     assert.equal(
       lines[1],
-      '186,20260604-02,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),A,Ianrey,5000,Starter Feed,2.00,6,,,Thu Jul 02 2026 17:44:29 GMT+0000 (Coordinated Universal Time)'
+      '186,20260604-02,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),A,Ianrey,5000,Starter Feed,2.00,6,,,,,,Thu Jul 02 2026 17:44:29 GMT+0000 (Coordinated Universal Time)'
     );
     assert.equal(
       lines[2],
-      '185,20260604-02,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),C,Enjay,6000,Starter Feed,2.00,17,,,Tue Jun 23 2026 12:23:05 GMT+0000 (Coordinated Universal Time)'
+      '185,20260604-02,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),C,Enjay,6000,Starter Feed,2.00,17,,,,,,Tue Jun 23 2026 12:23:05 GMT+0000 (Coordinated Universal Time)'
     );
   });
 
@@ -95,7 +95,7 @@ test.describe('Daily log CSV export formatting', () => {
       csv,
       [
         HEADER,
-        '10,batch-1,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),A,"Ian, ""Boss""",5000,"Starter, Feed",1.50,2,900,"Line one\nLine ""two""",Tue Jun 23 2026 12:23:05 GMT+0000 (Coordinated Universal Time)',
+        '10,batch-1,Tue Jun 23 2026 00:00:00 GMT+0000 (Coordinated Universal Time),A,"Ian, ""Boss""",5000,"Starter, Feed",1.50,2,900,,0.02,,"Line one\nLine ""two""",Tue Jun 23 2026 12:23:05 GMT+0000 (Coordinated Universal Time)',
       ].join('\r\n')
     );
   });
@@ -190,7 +190,7 @@ test.describe('Daily log CSV export route', () => {
 
     const text = await response.text();
     assert.equal(text.split('\r\n')[0], HEADER);
-    assert.match(text, /^185,20260604-02,Tue Jun 23 2026 00:00:00 GMT\+0000 \(Coordinated Universal Time\),C,Enjay,6000,Starter Feed,2\.00,17,,,Tue Jun 23 2026 12:23:05 GMT\+0000 \(Coordinated Universal Time\)$/m);
+    assert.match(text, /^185,20260604-02,Tue Jun 23 2026 00:00:00 GMT\+0000 \(Coordinated Universal Time\),C,Enjay,6000,Starter Feed,2\.00,17,,,,,,Tue Jun 23 2026 12:23:05 GMT\+0000 \(Coordinated Universal Time\)$/m);
   });
 
   test.it('rejects daily log exports without a selected batch', async () => {

@@ -1,4 +1,5 @@
 const { csvEscape } = require('../utils/validation');
+const { getAgeDay, getBroilerTarget, calculateActualFcr, BAG_WEIGHT_KG } = require('../utils/broilerTargets');
 
 const DAILY_LOG_EXPORT_HEADERS = [
   'id',
@@ -11,6 +12,9 @@ const DAILY_LOG_EXPORT_HEADERS = [
   'feed_consumed',
   'mortality',
   'average_weight_g',
+  'estimated_weight_g',
+  'actual_fcr',
+  'estimated_fcr',
   'remarks',
   'created_at',
 ];
@@ -154,13 +158,79 @@ function formatDailyLogExportRow(row) {
     feed_consumed: formatDecimal2(getValue(row, 'feed_consumed', 'feed', 'feedConsumed')),
     mortality: formatInteger(getValue(row, 'mortality')),
     average_weight_g: formatPlainValue(getValue(row, 'average_weight_g', 'averageWeightGrams')),
+    estimated_weight_g: formatInteger(getValue(row, 'estimated_weight_g')),
+    actual_fcr: formatDecimal2(getValue(row, 'actual_fcr')),
+    estimated_fcr: formatDecimal2(getValue(row, 'estimated_fcr')),
     remarks: formatPlainValue(getValue(row, 'remarks')),
     created_at: formatUtcTimestamp(getValue(row, 'created_at', 'createdAt')),
   };
 }
 
 function formatDailyLogExportRows(rows) {
-  return [...(rows || [])]
+  // Sort chronologically to compute running sums
+  const sortedChronologically = [...(rows || [])].sort((a, b) => {
+    const dateCompare = String(a.date || '').localeCompare(String(b.date || ''));
+    if (dateCompare !== 0) return dateCompare;
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+
+  const runningTotals = {}; // key -> { feedBags: 0, mortality: 0 }
+
+  const computedRows = sortedChronologically.map((row) => {
+    const empId = row.employee_id || row.employeeId || '';
+    const bldg = row.building || 'All';
+    const key = `${empId}:${bldg}`;
+
+    if (!runningTotals[key]) {
+      runningTotals[key] = { feedBags: 0, mortality: 0 };
+    }
+
+    const feedVal = Number(getValue(row, 'feed_consumed', 'feed', 'feedConsumed') || 0);
+    const mortVal = Number(getValue(row, 'mortality') || 0);
+
+    runningTotals[key].feedBags += feedVal;
+    runningTotals[key].mortality += mortVal;
+
+    const cumulativeFeedKg = runningTotals[key].feedBags * BAG_WEIGHT_KG;
+    const cumulativeMortality = runningTotals[key].mortality;
+
+    const handledBirds = Number(getValue(row, 'handled_birds_snapshot', 'handledBirds') || 0);
+    const liveHeads = Math.max(handledBirds - cumulativeMortality, 0);
+
+    let ageDay = null;
+    let estWeightG = null;
+    let estFcr = null;
+    let actFcr = null;
+
+    const batchStartDate = getValue(row, 'batch_start_date', 'batchStartDate');
+    const logDate = getValue(row, 'date');
+    if (batchStartDate && logDate) {
+      ageDay = getAgeDay(batchStartDate, logDate);
+      if (ageDay !== null) {
+        const target = getBroilerTarget(ageDay);
+        estWeightG = target ? target.weightGrams : null;
+      }
+    }
+
+    if (liveHeads > 0) {
+      if (estWeightG !== null) {
+        estFcr = calculateActualFcr(cumulativeFeedKg, liveHeads, estWeightG);
+      }
+      const avgWeight = getValue(row, 'average_weight_g', 'averageWeightGrams');
+      if (avgWeight !== null && avgWeight !== undefined && avgWeight !== '') {
+        actFcr = calculateActualFcr(cumulativeFeedKg, liveHeads, Number(avgWeight));
+      }
+    }
+
+    return {
+      ...row,
+      estimated_weight_g: estWeightG,
+      actual_fcr: actFcr,
+      estimated_fcr: estFcr,
+    };
+  });
+
+  return computedRows
     .sort(compareDailyLogRows)
     .map(formatDailyLogExportRow);
 }
