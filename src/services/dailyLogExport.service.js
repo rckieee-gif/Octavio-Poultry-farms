@@ -208,14 +208,18 @@ function formatDailyLogExportRows(rows) {
       ageDay = getAgeDay(batchStartDate, logDate);
       if (ageDay !== null) {
         const target = getBroilerTarget(ageDay);
-        estWeightG = target ? target.weightGrams : null;
+        if (target) {
+          estFcr = target.fcr || null;
+          if (liveHeads > 0 && target.fcr && target.fcr > 0) {
+            estWeightG = (cumulativeFeedKg / liveHeads / target.fcr) * 1000;
+          } else {
+            estWeightG = target.weightGrams;
+          }
+        }
       }
     }
 
     if (liveHeads > 0) {
-      if (estWeightG !== null) {
-        estFcr = calculateActualFcr(cumulativeFeedKg, liveHeads, estWeightG);
-      }
       const avgWeight = getValue(row, 'average_weight_g', 'averageWeightGrams');
       if (avgWeight !== null && avgWeight !== undefined && avgWeight !== '') {
         actFcr = calculateActualFcr(cumulativeFeedKg, liveHeads, Number(avgWeight));
