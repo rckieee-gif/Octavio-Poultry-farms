@@ -30,6 +30,10 @@ test.describe('Production CORS defaults', () => {
     assert.equal(response.headers.get('access-control-allow-origin'), origin);
   });
 
+  test.it('trusts the first proxy hop for Vercel and Render deployments', () => {
+    assert.equal(app.get('trust proxy'), 1);
+  });
+
   test.it('allows Vercel preview deployments for this project', async () => {
     const origin = 'https://octavio-farms-m9n7nq218-rckieee-1438s-projects.vercel.app';
     const response = await fetch(`${apiBase}/health`, {

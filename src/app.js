@@ -21,6 +21,8 @@ const openapiSpec = require('./openapi.json');
 
 const app = express();
 
+app.set('trust proxy', 1);
+
 // 1. CORS with Restricted Origin Matching
 const defaultProductionOrigins = [
   'https://octavio-farms.vercel.app',
@@ -68,12 +70,23 @@ app.use(helmet({
   },
 }));
 
-// 3. Global Rate Limiting for API routes
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Limit each IP to 200 requests per windowMs
+// 3. Rate limiting
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 20),
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many login attempts from this IP, please try again after 15 minutes' },
+});
+app.use('/api/auth/login', loginLimiter);
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: Number(process.env.API_RATE_LIMIT_MAX || 1000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/auth/login',
   message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
 });
 app.use('/api', limiter);
